@@ -87,26 +87,30 @@ if not st.session_state["logged_in_email"]:
         )
 
         if result and "token" in result:
-            # Safely extract the ID token string
+            import urllib.request
+            import json
+            
+            # Safely extract the ID token
             id_token = result["token"]["id_token"]
             
-            # A JWT token has 3 parts separated by dots. We need the middle one (index 1)
-            token_parts = id_token.split('.')
-            payload = token_parts  # <--- This extracts just the string, preventing the list error
+            # Failsafe: If the server somehow returns the token wrapped in a list, extract the string
+            if isinstance(id_token, list):
+                id_token = id_token
+                
+            # Bulletproof approach: Ask Google's official endpoint to decode and validate the token
+            verify_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
             
-            # Fix Base64 padding
-            payload += '=' * (-len(payload) % 4)
-            
-            # Decode the payload securely into a JSON object
-            decoded_bytes = base64.urlsafe_b64decode(payload)
-            user_info = json.loads(decoded_bytes.decode('utf-8'))
-            
-            # Save the email and let the user in
-            st.session_state["logged_in_email"] = user_info["email"] 
-            st.rerun()
-
-    # CRITICAL: This stops the rest of your dashboard from loading for unauthorized users!
-    st.stop()
+            try:
+                with urllib.request.urlopen(verify_url) as response:
+                    user_info = json.loads(response.read().decode())
+                    
+                # Save the email and let the user in
+                st.session_state["logged_in_email"] = user_info.get("email") 
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"⚠️ Error verifying login with Google: {e}")
+                st.stop()
 
 # ==========================================
 # 🚀 MAIN DASHBOARD (ONLY REACHED IF LOGGED IN)
