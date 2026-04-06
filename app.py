@@ -87,14 +87,22 @@ if not st.session_state["logged_in_email"]:
         )
 
         if result and "token" in result:
-            # Decode the secure JWT token to extract the user's email address
+            # Safely extract the ID token string
             id_token = result["token"]["id_token"]
-            payload = id_token.split('.')
-            payload += '=' * (-len(payload) % 4)  # Fix padding if necessary
-            decoded_payload = base64.urlsafe_b64decode(payload)
-            user_info = json.loads(decoded_payload)
-
-            st.session_state["logged_in_email"] = user_info["email"]
+            
+            # A JWT token has 3 parts separated by dots. We need the middle one (index 1)
+            token_parts = id_token.split('.')
+            payload = token_parts  # <--- This extracts just the string, preventing the list error
+            
+            # Fix Base64 padding
+            payload += '=' * (-len(payload) % 4)
+            
+            # Decode the payload securely into a JSON object
+            decoded_bytes = base64.urlsafe_b64decode(payload)
+            user_info = json.loads(decoded_bytes.decode('utf-8'))
+            
+            # Save the email and let the user in
+            st.session_state["logged_in_email"] = user_info["email"] 
             st.rerun()
 
     # CRITICAL: This stops the rest of your dashboard from loading for unauthorized users!
