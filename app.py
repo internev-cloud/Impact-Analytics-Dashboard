@@ -63,11 +63,11 @@ if not st.session_state["logged_in_email"]:
         st.write("") # Spacing
         st.write("")
         try:
-            st.image("evidyaloka_logo.png", width=300)
+            st.image("evidyaloka_logo.png", width=320)
         except:
             st.empty()
             
-        st.markdown("<h2 style='text-align: center; color: #0094c9;'>Staff Analytics Portal</h2>", unsafe_allow_html=True)
+        st.markdown("<h2 style='text-align: center; color: #0094c9;'>Student Analytics Portal</h2>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center;'>Please sign in with your @evidyaloka.org email to access the dashboard.</p>", unsafe_allow_html=True)
         st.markdown("---")
         
