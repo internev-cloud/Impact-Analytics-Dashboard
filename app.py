@@ -58,7 +58,7 @@ if "user_first_name" not in st.session_state:
 
 # If not logged in, show ONLY the login screen and STOP execution
 if not st.session_state["logged_in_email"]:
-    col1, col2, col3 = st.columns()
+    col1, col2, col3 = st.columns(3)
     with col2:
         st.write("") # Spacing
         st.write("")
