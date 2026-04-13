@@ -111,8 +111,46 @@ if not st.session_state["logged_in_email"]:
     # CRITICAL: This stops the rest of your dashboard and sidebar from loading for unauthorized users!
     st.stop()
 
+
 # ==========================================
-# 🚀 MAIN DASHBOARD (ONLY REACHED IF LOGGED IN)
+# 🏠 APP ROUTER / HOMEPAGE GATEKEEPER
+# ==========================================
+# Initialize the routing state
+if "current_page" not in st.session_state:
+    st.session_state["current_page"] = "home"
+
+# Render the Homepage if that's the current state
+if st.session_state["current_page"] == "home":
+    st.write("")
+    st.write("")
+    st.title(f"👋 Welcome, {st.session_state['user_first_name']}!")
+    st.markdown("<p style='color: gray; font-size: 1.1em;'>Select an application below to continue.</p>", unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Using columns to create a scalable grid for future icons/apps
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        # App 1: Impact Analytics
+        st.markdown("<h1 style='text-align: center; font-size: 4rem;'>📈</h1>", unsafe_allow_html=True)
+        if st.button("Impact Analytics Dashboard", use_container_width=True):
+            st.session_state["current_page"] = "dashboard"
+            st.rerun()
+            
+    with col2:
+        # App 2: Future Module Placeholder
+        st.markdown("<h1 style='text-align: center; font-size: 4rem;'>🚧</h1>", unsafe_allow_html=True)
+        if st.button("Future Module", use_container_width=True):
+            st.info("This module is currently under construction.")
+            
+    # col3 and col4 remain empty for future expansion. Just copy the block above to add more.
+    
+    # CRITICAL: Stop execution here so the dashboard data engine doesn't load on the homepage
+    st.stop()
+
+
+# ==========================================
+# 🚀 MAIN DASHBOARD (ONLY REACHED IF LOGGED IN & PAGE == DASHBOARD)
 # ==========================================
 # Because this is placed AFTER st.stop(), it will never show on the login screen
 st.title("📈 Impact Analytics Dashboard")
@@ -130,11 +168,21 @@ with st.sidebar:
     # Use the first name grabbed from Google!
     st.success(f"👤 **Logged in as:** {st.session_state['user_first_name']}")
     
-    if st.button("Sign Out", use_container_width=True):
-        # Clear the states and reload the page
-        st.session_state["logged_in_email"] = None
-        st.session_state["user_first_name"] = "User"
-        st.rerun()
+    # Added Navigation Buttons
+    nav_col1, nav_col2 = st.columns(2)
+    with nav_col1:
+        if st.button("🏠 Home", use_container_width=True):
+            st.session_state["current_page"] = "home"
+            st.rerun()
+            
+    with nav_col2:
+        if st.button("Sign Out", use_container_width=True):
+            # Clear the states and reload the page
+            st.session_state["logged_in_email"] = None
+            st.session_state["user_first_name"] = "User"
+            st.session_state["current_page"] = "home" # Reset route on signout
+            st.rerun()
+            
     st.markdown("---")
 
 # ==========================================
