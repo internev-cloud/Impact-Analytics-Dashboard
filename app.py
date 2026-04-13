@@ -244,7 +244,7 @@ if st.session_state["current_page"] == "longitudinal":
                 st.header("🎯 Global Filters")
                 
                 # 1. State Filter
-                states = ["All"] + sorted(df_long['State'].dropna().unique().tolist()) if 'State' in df_long.columns else ["All"]
+                states = ["All"] + sorted(df_long['State'].dropna().astype(str).unique().tolist()) if 'State' in df_long.columns else ["All"]
                 selected_states = st.selectbox("Select State", states, index=0, key="state_long")
                 
                 df_state_filtered = df_long.copy()
@@ -252,7 +252,7 @@ if st.session_state["current_page"] == "longitudinal":
                     df_state_filtered = df_state_filtered[df_state_filtered['State'] == selected_states]
 
                 # 2. Donor Filter
-                donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().unique().tolist()) if 'Donor' in df_state_filtered.columns else ["All"]
+                donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().astype(str).unique().tolist()) if 'Donor' in df_state_filtered.columns else ["All"]
                 selected_donors = st.selectbox("Select Donor", donors, index=0, key="donor_long")
                 
                 df_donor_filtered = df_state_filtered.copy()
@@ -260,7 +260,7 @@ if st.session_state["current_page"] == "longitudinal":
                     df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'] == selected_donors]
 
                 # 3. Centre Filter
-                centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().unique().tolist()) if 'Centre Name' in df_donor_filtered.columns else ["All"]
+                centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().astype(str).unique().tolist()) if 'Centre Name' in df_donor_filtered.columns else ["All"]
                 selected_centres = st.selectbox("Select Centre", centres, index=0, key="centre_long")
                 
                 df_centre_filtered = df_donor_filtered.copy()
@@ -268,7 +268,7 @@ if st.session_state["current_page"] == "longitudinal":
                     df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'] == selected_centres]
 
                 # 4. Subject Filter
-                subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().unique().tolist()) if 'Subject' in df_centre_filtered.columns else ["All"]
+                subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().astype(str).unique().tolist()) if 'Subject' in df_centre_filtered.columns else ["All"]
                 selected_subjects = st.selectbox("Select Subject", subjects, index=0, key="subject_long")
 
                 df_subject_filtered = df_centre_filtered.copy()
@@ -276,7 +276,7 @@ if st.session_state["current_page"] == "longitudinal":
                     df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'] == selected_subjects]
 
                 # 5. Grade Filter
-                grades = sorted(df_subject_filtered['Grade'].dropna().unique().tolist()) if 'Grade' in df_subject_filtered.columns else []
+                grades = sorted(df_subject_filtered['Grade'].dropna().astype(str).unique().tolist()) if 'Grade' in df_subject_filtered.columns else []
                 selected_grades = st.multiselect("Select Grade(s)", options=grades, default=grades, key="grade_long")
 
                 df_grade_filtered = df_subject_filtered.copy()
@@ -287,8 +287,8 @@ if st.session_state["current_page"] == "longitudinal":
 
                 # 6. Gender Filter
                 if 'Gender' in df_grade_filtered.columns:
-                    valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].str.lower().isin(['nan', 'none', 'null', ''])].copy()
-                    genders = sorted(valid_genders['Gender'].unique().tolist())
+                    valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])].copy()
+                    genders = sorted(valid_genders['Gender'].astype(str).unique().tolist())
                     if genders:
                         selected_genders = st.multiselect("Select Gender(s)", options=genders, default=genders, key="gender_long")
                         filtered_df_long = df_grade_filtered[df_grade_filtered['Gender'].isin(selected_genders)].copy()
@@ -465,7 +465,7 @@ if st.session_state["current_page"] == "longitudinal":
                     st.markdown("### 🔎 Deep-Dive: Individual Trajectory")
                     
                     # Ensure only students present in both years are available in the dropdown
-                    all_retained_ids = sorted(list(retained_students))
+                    all_retained_ids = sorted([str(x) for x in retained_students])
                     selected_student = st.selectbox("Search Student ID (Retained Cohort Only)", options=["Select an ID..."] + all_retained_ids, key="student_search_long")
                     
                     if selected_student != "Select an ID...":
@@ -622,7 +622,7 @@ if os.path.exists(DATA_FILE):
             st.header("🎯 Global Filters")
             
             # 1. State Filter (Displays Full Names from pristine df)
-            states = ["All"] + sorted(df['State'].dropna().unique().tolist())
+            states = ["All"] + sorted(df['State'].dropna().astype(str).unique().tolist())
             selected_states = st.selectbox("Select State", states, index=0)
             
             # Pre-filter for next dropdown
@@ -631,7 +631,7 @@ if os.path.exists(DATA_FILE):
                 df_state_filtered = df_state_filtered[df_state_filtered['State'] == selected_states]
 
             # 2. Donor Filter (Dependent on State)
-            donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().unique().tolist())
+            donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().astype(str).unique().tolist())
             selected_donors = st.selectbox("Select Donor", donors, index=0)
             
             # Pre-filter for next dropdown
@@ -640,7 +640,7 @@ if os.path.exists(DATA_FILE):
                 df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'] == selected_donors]
 
             # 3. Centre Filter (Dependent on State & Donor)
-            centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().unique().tolist())
+            centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().astype(str).unique().tolist())
             selected_centres = st.selectbox("Select Centre", centres, index=0)
             
             # Pre-filter for next dropdown
@@ -649,7 +649,7 @@ if os.path.exists(DATA_FILE):
                 df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'] == selected_centres]
 
             # 4. Subject Filter (Dependent on Centre)
-            subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().unique().tolist())
+            subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().astype(str).unique().tolist())
             selected_subjects = st.selectbox("Select Subject", subjects, index=0)
 
             # Pre-filter for next dropdown
@@ -658,7 +658,7 @@ if os.path.exists(DATA_FILE):
                 df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'] == selected_subjects]
 
             # 5. Grade Filter (Dependent on Subject, Multi-select)
-            grades = sorted(df_subject_filtered['Grade'].dropna().unique().tolist())
+            grades = sorted(df_subject_filtered['Grade'].dropna().astype(str).unique().tolist())
             selected_grades = st.multiselect("Select Grade(s)", options=grades, default=grades)
 
             # Pre-filter for next dropdown
@@ -670,8 +670,8 @@ if os.path.exists(DATA_FILE):
 
             # 6. Gender Filter (Dependent on Grade, Multi-select)
             if 'Gender' in df_grade_filtered.columns:
-                valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].str.lower().isin(['nan', 'none', 'null', ''])].copy()
-                genders = sorted(valid_genders['Gender'].unique().tolist())
+                valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])].copy()
+                genders = sorted(valid_genders['Gender'].astype(str).unique().tolist())
                 if genders:
                     selected_genders = st.multiselect("Select Gender(s)", options=genders, default=genders)
                     filtered_df = df_grade_filtered[df_grade_filtered['Gender'].isin(selected_genders)].copy()
@@ -1021,7 +1021,7 @@ if os.path.exists(DATA_FILE):
                 
                 if 'Gender' in filtered_df.columns:
                     # Filter out any lingering null/blank string artifacts
-                    gdf = filtered_df[~filtered_df['Gender'].str.lower().isin(['nan', 'none', 'null', ''])].copy()
+                    gdf = filtered_df[~filtered_df['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])].copy()
                     
                     if not gdf.empty:
                         # 1. High-Level Metrics
@@ -1030,7 +1030,7 @@ if os.path.exists(DATA_FILE):
                         g_base = gdf[gdf['Academic Year'] == 'Baseline']
                         g_end = gdf[gdf['Academic Year'] == 'Endline']
                         
-                        genders_present = sorted(gdf['Gender'].unique())
+                        genders_present = sorted(gdf['Gender'].astype(str).unique())
                         cols = st.columns(max(len(genders_present), 2)) # Ensure at least 2 columns for layout
                         
                         for i, g in enumerate(genders_present):
