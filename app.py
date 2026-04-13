@@ -275,13 +275,18 @@ if st.session_state["current_page"] == "longitudinal":
                 if selected_subjects != "All":
                     df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'].astype(str) == selected_subjects]
 
-                # 5. Grade Filter
-                grades = sorted([str(x) for x in df_subject_filtered['Grade'].dropna().unique()]) if 'Grade' in df_subject_filtered.columns else []
-                selected_grades = st.multiselect("Select Grade(s)", options=grades, default=grades, key="grade_long")
+                # 5. Grade Filter (COHORT TRACKING LOGIC)
+                df_base_year = df_subject_filtered[df_subject_filtered['Academic Year'] == 'AY24-25']
+                grades = sorted([str(x) for x in df_base_year['Grade'].dropna().unique()]) if 'Grade' in df_base_year.columns else []
+                
+                selected_grades = st.multiselect("Select AY 24-25 Grade (Cohort Tracking)", options=grades, default=grades, key="grade_long", help="Select the student's grade in AY 24-25. The dashboard will automatically track them into their promoted grade for AY 25-26.")
 
                 df_grade_filtered = df_subject_filtered.copy()
                 if selected_grades:
-                    df_grade_filtered = df_grade_filtered[df_grade_filtered['Grade'].astype(str).isin(selected_grades)]
+                    # Identify which students were in the selected grade(s) during the base year
+                    cohort_ids = df_base_year[df_base_year['Grade'].astype(str).isin(selected_grades)]['Student ID'].unique()
+                    # Filter the entire dataset to ONLY include those specific students (keeping their AY 25-26 promoted data intact)
+                    df_grade_filtered = df_grade_filtered[df_grade_filtered['Student ID'].isin(cohort_ids)]
                 else:
                     df_grade_filtered = df_grade_filtered.iloc[0:0] 
 
