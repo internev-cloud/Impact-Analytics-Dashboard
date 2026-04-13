@@ -244,54 +244,55 @@ if st.session_state["current_page"] == "longitudinal":
                 st.header("🎯 Global Filters")
                 
                 # 1. State Filter
-                states = ["All"] + sorted(df_long['State'].dropna().astype(str).unique().tolist()) if 'State' in df_long.columns else ["All"]
+                states = ["All"] + sorted([str(x) for x in df_long['State'].dropna().unique()]) if 'State' in df_long.columns else ["All"]
                 selected_states = st.selectbox("Select State", states, index=0, key="state_long")
                 
                 df_state_filtered = df_long.copy()
                 if selected_states != "All": 
-                    df_state_filtered = df_state_filtered[df_state_filtered['State'] == selected_states]
+                    df_state_filtered = df_state_filtered[df_state_filtered['State'].astype(str) == selected_states]
 
                 # 2. Donor Filter
-                donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().astype(str).unique().tolist()) if 'Donor' in df_state_filtered.columns else ["All"]
+                donors = ["All"] + sorted([str(x) for x in df_state_filtered['Donor'].dropna().unique()]) if 'Donor' in df_state_filtered.columns else ["All"]
                 selected_donors = st.selectbox("Select Donor", donors, index=0, key="donor_long")
                 
                 df_donor_filtered = df_state_filtered.copy()
                 if selected_donors != "All":
-                    df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'] == selected_donors]
+                    df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'].astype(str) == selected_donors]
 
                 # 3. Centre Filter
-                centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().astype(str).unique().tolist()) if 'Centre Name' in df_donor_filtered.columns else ["All"]
+                centres = ["All"] + sorted([str(x) for x in df_donor_filtered['Centre Name'].dropna().unique()]) if 'Centre Name' in df_donor_filtered.columns else ["All"]
                 selected_centres = st.selectbox("Select Centre", centres, index=0, key="centre_long")
                 
                 df_centre_filtered = df_donor_filtered.copy()
                 if selected_centres != "All":
-                    df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'] == selected_centres]
+                    df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'].astype(str) == selected_centres]
 
                 # 4. Subject Filter
-                subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().astype(str).unique().tolist()) if 'Subject' in df_centre_filtered.columns else ["All"]
+                subjects = ["All"] + sorted([str(x) for x in df_centre_filtered['Subject'].dropna().unique()]) if 'Subject' in df_centre_filtered.columns else ["All"]
                 selected_subjects = st.selectbox("Select Subject", subjects, index=0, key="subject_long")
 
                 df_subject_filtered = df_centre_filtered.copy()
                 if selected_subjects != "All":
-                    df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'] == selected_subjects]
+                    df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'].astype(str) == selected_subjects]
 
                 # 5. Grade Filter
-                grades = sorted(df_subject_filtered['Grade'].dropna().astype(str).unique().tolist()) if 'Grade' in df_subject_filtered.columns else []
+                grades = sorted([str(x) for x in df_subject_filtered['Grade'].dropna().unique()]) if 'Grade' in df_subject_filtered.columns else []
                 selected_grades = st.multiselect("Select Grade(s)", options=grades, default=grades, key="grade_long")
 
                 df_grade_filtered = df_subject_filtered.copy()
                 if selected_grades:
-                    df_grade_filtered = df_grade_filtered[df_grade_filtered['Grade'].isin(selected_grades)]
+                    df_grade_filtered = df_grade_filtered[df_grade_filtered['Grade'].astype(str).isin(selected_grades)]
                 else:
                     df_grade_filtered = df_grade_filtered.iloc[0:0] 
 
                 # 6. Gender Filter
                 if 'Gender' in df_grade_filtered.columns:
-                    valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])].copy()
-                    genders = sorted(valid_genders['Gender'].astype(str).unique().tolist())
+                    valid_genders = df_grade_filtered.dropna(subset=['Gender'])
+                    valid_genders = valid_genders[~valid_genders['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])]
+                    genders = sorted([str(x) for x in valid_genders['Gender'].unique()])
                     if genders:
                         selected_genders = st.multiselect("Select Gender(s)", options=genders, default=genders, key="gender_long")
-                        filtered_df_long = df_grade_filtered[df_grade_filtered['Gender'].isin(selected_genders)].copy()
+                        filtered_df_long = df_grade_filtered[df_grade_filtered['Gender'].astype(str).isin(selected_genders)].copy()
                     else:
                         filtered_df_long = df_grade_filtered.copy()
                 else:
@@ -470,7 +471,7 @@ if st.session_state["current_page"] == "longitudinal":
                     
                     if selected_student != "Select an ID...":
                         # Use filtered_df_long so that the student query also respects the current global filters
-                        student_data = filtered_df_long[filtered_df_long['Student ID'] == selected_student].copy()
+                        student_data = filtered_df_long[filtered_df_long['Student ID'].astype(str) == selected_student].copy()
                         
                         if not student_data.empty:
                             time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
@@ -622,59 +623,60 @@ if os.path.exists(DATA_FILE):
             st.header("🎯 Global Filters")
             
             # 1. State Filter (Displays Full Names from pristine df)
-            states = ["All"] + sorted(df['State'].dropna().astype(str).unique().tolist())
+            states = ["All"] + sorted([str(x) for x in df['State'].dropna().unique()])
             selected_states = st.selectbox("Select State", states, index=0)
             
             # Pre-filter for next dropdown
             df_state_filtered = df.copy()
             if selected_states != "All": 
-                df_state_filtered = df_state_filtered[df_state_filtered['State'] == selected_states]
+                df_state_filtered = df_state_filtered[df_state_filtered['State'].astype(str) == selected_states]
 
             # 2. Donor Filter (Dependent on State)
-            donors = ["All"] + sorted(df_state_filtered['Donor'].dropna().astype(str).unique().tolist())
+            donors = ["All"] + sorted([str(x) for x in df_state_filtered['Donor'].dropna().unique()])
             selected_donors = st.selectbox("Select Donor", donors, index=0)
             
             # Pre-filter for next dropdown
             df_donor_filtered = df_state_filtered.copy()
             if selected_donors != "All":
-                df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'] == selected_donors]
+                df_donor_filtered = df_donor_filtered[df_donor_filtered['Donor'].astype(str) == selected_donors]
 
             # 3. Centre Filter (Dependent on State & Donor)
-            centres = ["All"] + sorted(df_donor_filtered['Centre Name'].dropna().astype(str).unique().tolist())
+            centres = ["All"] + sorted([str(x) for x in df_donor_filtered['Centre Name'].dropna().unique()])
             selected_centres = st.selectbox("Select Centre", centres, index=0)
             
             # Pre-filter for next dropdown
             df_centre_filtered = df_donor_filtered.copy()
             if selected_centres != "All":
-                df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'] == selected_centres]
+                df_centre_filtered = df_centre_filtered[df_centre_filtered['Centre Name'].astype(str) == selected_centres]
 
             # 4. Subject Filter (Dependent on Centre)
-            subjects = ["All"] + sorted(df_centre_filtered['Subject'].dropna().astype(str).unique().tolist())
+            subjects = ["All"] + sorted([str(x) for x in df_centre_filtered['Subject'].dropna().unique()])
             selected_subjects = st.selectbox("Select Subject", subjects, index=0)
 
             # Pre-filter for next dropdown
             df_subject_filtered = df_centre_filtered.copy()
             if selected_subjects != "All":
-                df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'] == selected_subjects]
+                df_subject_filtered = df_subject_filtered[df_subject_filtered['Subject'].astype(str) == selected_subjects]
 
             # 5. Grade Filter (Dependent on Subject, Multi-select)
-            grades = sorted(df_subject_filtered['Grade'].dropna().astype(str).unique().tolist())
+            grades = sorted([str(x) for x in df_subject_filtered['Grade'].dropna().unique()])
             selected_grades = st.multiselect("Select Grade(s)", options=grades, default=grades)
 
             # Pre-filter for next dropdown
             df_grade_filtered = df_subject_filtered.copy()
             if selected_grades:
-                df_grade_filtered = df_grade_filtered[df_grade_filtered['Grade'].isin(selected_grades)]
+                df_grade_filtered = df_grade_filtered[df_grade_filtered['Grade'].astype(str).isin(selected_grades)]
             else:
                 df_grade_filtered = df_grade_filtered.iloc[0:0] 
 
             # 6. Gender Filter (Dependent on Grade, Multi-select)
             if 'Gender' in df_grade_filtered.columns:
-                valid_genders = df_grade_filtered[~df_grade_filtered['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])].copy()
-                genders = sorted(valid_genders['Gender'].astype(str).unique().tolist())
+                valid_genders = df_grade_filtered.dropna(subset=['Gender'])
+                valid_genders = valid_genders[~valid_genders['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])]
+                genders = sorted([str(x) for x in valid_genders['Gender'].unique()])
                 if genders:
                     selected_genders = st.multiselect("Select Gender(s)", options=genders, default=genders)
-                    filtered_df = df_grade_filtered[df_grade_filtered['Gender'].isin(selected_genders)].copy()
+                    filtered_df = df_grade_filtered[df_grade_filtered['Gender'].astype(str).isin(selected_genders)].copy()
                 else:
                     filtered_df = df_grade_filtered.copy()
             else:
@@ -1030,13 +1032,13 @@ if os.path.exists(DATA_FILE):
                         g_base = gdf[gdf['Academic Year'] == 'Baseline']
                         g_end = gdf[gdf['Academic Year'] == 'Endline']
                         
-                        genders_present = sorted(gdf['Gender'].astype(str).unique())
+                        genders_present = sorted([str(x) for x in gdf['Gender'].dropna().unique()])
                         cols = st.columns(max(len(genders_present), 2)) # Ensure at least 2 columns for layout
                         
                         for i, g in enumerate(genders_present):
                             with cols[i]:
-                                b_mean = g_base[g_base['Gender'] == g]['Obtained Marks'].mean() if not g_base.empty else None
-                                e_mean = g_end[g_end['Gender'] == g]['Obtained Marks'].mean() if not g_end.empty else None
+                                b_mean = g_base[g_base['Gender'].astype(str) == g]['Obtained Marks'].mean() if not g_base.empty else None
+                                e_mean = g_end[g_end['Gender'].astype(str) == g]['Obtained Marks'].mean() if not g_end.empty else None
                                 
                                 if b_mean is not None and e_mean is not None:
                                     st.metric(f"{g} - Endline Avg", f"{e_mean:.2f}", delta=f"{e_mean - b_mean:.2f}")
