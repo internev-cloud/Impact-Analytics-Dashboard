@@ -396,7 +396,7 @@ if st.session_state["current_page"] == "longitudinal":
                         student_data['Timepoint'] = pd.Categorical(student_data['Timepoint'], categories=time_order, ordered=True)
                         student_data = student_data.sort_values('Timepoint')
                         
-                        col_ind1, col_ind2 = st.columns()
+                        col_ind1, col_ind2 = st.columns(2)
                         
                         with col_ind1:
                             fig_ind = px.line(student_data, x="Timepoint", y="Obtained Marks", color="Subject", 
