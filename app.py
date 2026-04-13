@@ -138,14 +138,296 @@ if st.session_state["current_page"] == "home":
             st.rerun()
             
     with col2:
-        # App 2: Future Module Placeholder
-        st.markdown("<h1 style='text-align: center; font-size: 4rem;'>🚧</h1>", unsafe_allow_html=True)
-        if st.button("Future Module", use_container_width=True):
-            st.info("This module is currently under construction.")
+        # App 2: Longitudinal Analysis (McKinsey Module)
+        st.markdown("<h1 style='text-align: center; font-size: 4rem;'>🏛️</h1>", unsafe_allow_html=True)
+        if st.button("Longitudinal Analysis", use_container_width=True):
+            st.session_state["current_page"] = "longitudinal"
+            st.rerun()
             
-    # col3 and col4 remain empty for future expansion. Just copy the block above to add more.
+    # col3 and col4 remain empty for future expansion
     
-    # CRITICAL: Stop execution here so the dashboard data engine doesn't load on the homepage
+    # CRITICAL: Stop execution here so the dashboard data engines don't load on the homepage
+    st.stop()
+
+
+# ==========================================
+# 🏛️ LONGITUDINAL ANALYSIS MODULE (MCKINSEY STYLE)
+# ==========================================
+if st.session_state["current_page"] == "longitudinal":
+    st.title("🏛️ Strategic Longitudinal Analysis")
+    st.markdown("<p style='color: gray; font-size: 1.1em;'>Year-over-Year Trajectories, Equity Tracking, and Strategic Insights (AY 24-25 vs AY 25-26)</p>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # Dedicated Self-Contained Loader
+    @st.cache_data
+    def load_multi_year_data(file_24, file_25):
+        def clean_sheet(df, year, period):
+            if df.empty: return pd.DataFrame()
+            cols = ['Student ID', 'Subject', 'Obtained Marks', 'Rubrics', 'Category', 'Gender']
+            df_clean = df[[c for c in cols if c in df.columns]].copy()
+            if 'Rubrics' in df_clean.columns: df_clean.rename(columns={'Rubrics': 'Category'}, inplace=True)
+            df_clean['Academic Year'] = year
+            df_clean['Period'] = period
+            df_clean['Timepoint'] = f"{year} {period}"
+            df_clean['Obtained Marks'] = pd.to_numeric(df_clean['Obtained Marks'], errors='coerce')
+            df_clean['Student ID'] = df_clean['Student ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+            if 'Gender' in df_clean.columns:
+                df_clean['Gender'] = df_clean['Gender'].astype(str).str.strip().str.title()
+            return df_clean.dropna(subset=['Student ID', 'Obtained Marks'])
+
+        try:
+            xls_24 = pd.ExcelFile(file_24)
+            df_24_bl = clean_sheet(pd.read_excel(file_24, sheet_name=0), 'AY24-25', 'Baseline')
+            df_24_el = clean_sheet(pd.read_excel(file_24, sheet_name=1 if len(xls_24.sheet_names) > 1 else 0), 'AY24-25', 'Endline')
+            
+            xls_25 = pd.ExcelFile(file_25)
+            df_25_bl = clean_sheet(pd.read_excel(file_25, sheet_name=0), 'AY25-26', 'Baseline')
+            df_25_el = clean_sheet(pd.read_excel(file_25, sheet_name=1 if len(xls_25.sheet_names) > 1 else 0), 'AY25-26', 'Endline')
+            
+            combined = pd.concat([df_24_bl, df_24_el, df_25_bl, df_25_el], ignore_index=True)
+            return combined
+        except Exception as e:
+            return None
+
+    FILE_24 = "EL-BL-Data-AY-24-25.xlsx"
+    FILE_25 = "BL-EL-AY-25-26-Final-AllSubjects.xlsx"
+
+    # ==========================================
+    # SIDEBAR FOR LONGITUDINAL MODULE
+    # ==========================================
+    with st.sidebar:
+        try:
+            st.image("evidyaloka_logo.png", width=273)
+        except:
+            st.warning("⚠️ Logo not found.")
+        
+        st.success(f"👤 **Logged in as:** {st.session_state['user_first_name']}")
+        
+        nav_col1, nav_col2 = st.columns(2)
+        with nav_col1:
+            if st.button("🏠 Home", use_container_width=True, key="nav_home_long"):
+                st.session_state["current_page"] = "home"
+                st.rerun()
+                
+        with nav_col2:
+            if st.button("Sign Out", use_container_width=True, key="signout_long"):
+                st.session_state["logged_in_email"] = None
+                st.session_state["user_first_name"] = "User"
+                st.session_state["current_page"] = "home"
+                st.rerun()
+                
+        st.markdown("---")
+        st.info("💡 **Module Note:** This section analyzes the overlap between AY 24-25 and AY 25-26 to track long-term strategic growth.")
+
+    if os.path.exists(FILE_24) and os.path.exists(FILE_25):
+        with st.spinner('Synthesizing Multi-Year Intelligence...'):
+            df_long = load_multi_year_data(FILE_24, FILE_25)
+        
+        if df_long is not None and not df_long.empty:
+            
+            # Isolate Endlines for YoY Corporate Comparison
+            df_el24 = df_long[df_long['Timepoint'] == 'AY24-25 Endline']
+            df_el25 = df_long[df_long['Timepoint'] == 'AY25-26 Endline']
+            retained_students = set(df_el24['Student ID']).intersection(set(df_el25['Student ID']))
+            
+            if len(retained_students) == 0:
+                st.error("No overlapping Student IDs found between AY 24-25 and AY 25-26. Cannot perform longitudinal analysis.")
+                st.stop()
+                
+            df_ret_24 = df_el24[df_el24['Student ID'].isin(retained_students)]
+            df_ret_25 = df_el25[df_el25['Student ID'].isin(retained_students)]
+            
+            # --- TABS SETUP ---
+            mig_tab, sub_tab, gen_tab, mic_tab = st.tabs([
+                "📊 Overall Health (Migration)", 
+                "📚 Subject Efficacy", 
+                "🚻 Gender Equity",
+                "🧑‍🎓 Single Student"
+            ])
+            
+            # ==========================================
+            # TAB 1: OVERALL HEALTH & MIGRATION
+            # ==========================================
+            with mig_tab:
+                st.markdown("### 🧱 Structural Tier Migration (Retained Cohort)")
+                
+                col_m1, col_m2 = st.columns([1.5, 1])
+                
+                with col_m1:
+                    if 'Category' in df_ret_24.columns:
+                        cat_24 = df_ret_24['Category'].value_counts(normalize=True).reset_index()
+                        cat_24.columns = ['Category', 'Percentage']
+                        cat_24['Year'] = 'AY 24-25 (Endline)'
+                        
+                        cat_25 = df_ret_25['Category'].value_counts(normalize=True).reset_index()
+                        cat_25.columns = ['Category', 'Percentage']
+                        cat_25['Year'] = 'AY 25-26 (Endline)'
+                        
+                        cat_df = pd.concat([cat_24, cat_25])
+                        cat_df['Percentage'] = cat_df['Percentage'] * 100
+                        
+                        fig_cat = px.bar(cat_df, x="Year", y="Percentage", color="Category", 
+                                         color_discrete_map={"Reviving": "#f27c48", "Initiating": "#0094c9", "Shaping": "#00964d", "Evolving": "#ed1c2d"},
+                                         text=cat_df['Percentage'].apply(lambda x: f'{x:.1f}%'),
+                                         category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"], "Year": ["AY 24-25 (Endline)", "AY 25-26 (Endline)"]})
+                        
+                        fig_cat.update_layout(barmode='stack', xaxis_title="", yaxis_title="% of Cohort", 
+                                              plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                                              legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""))
+                        st.plotly_chart(fig_cat, width='stretch')
+                
+                with col_m2:
+                    st.info("**What this means:**\nThis chart strips away the noise and looks only at students who stayed with us for two full years. It shows how the 'shape' of their performance changed. A successful program will show the red/orange sections ('Reviving'/'Initiating') shrinking as students migrate upward into green sections ('Shaping'/'Evolving').")
+                    
+                    try:
+                        rev_24 = cat_24[cat_24['Category'] == 'Reviving']['Percentage'].values * 100 if not cat_24[cat_24['Category'] == 'Reviving'].empty else 0
+                        rev_25 = cat_25[cat_25['Category'] == 'Reviving']['Percentage'].values * 100 if not cat_25[cat_25['Category'] == 'Reviving'].empty else 0
+                        rev_diff = rev_25 - rev_24
+                        
+                        st.success(f"**🔍 Key Insight:**\nThe proportion of critically struggling students ('Reviving') changed by **{rev_diff:+.1f}%** Year-over-Year.")
+                        
+                        if rev_diff < 0:
+                            st.markdown("**💡 Strategic Suggestion:**\nExcellent progress. The base is shrinking. Keep investing in the current foundational remedial strategies as they are actively pulling students out of the danger zone.")
+                        else:
+                            st.markdown("**💡 Strategic Suggestion:**\nThe struggling cohort is stagnating or growing. We need to audit our Tier-1 interventions. Consider implementing highly targeted, small-group tutoring specifically for the 'Reviving' students, as current general methods aren't lifting them.")
+                    except:
+                        st.write("Insufficient category data for insights.")
+
+            # ==========================================
+            # TAB 2: SUBJECT EFFICACY
+            # ==========================================
+            with sub_tab:
+                st.markdown("### 📈 YoY Subject Trajectory (Slopegraph)")
+                
+                col_s1, col_s2 = st.columns([1.5, 1])
+                
+                with col_s1:
+                    subj_24 = df_ret_24.groupby('Subject')['Obtained Marks'].mean().reset_index()
+                    subj_24['Year'] = 'AY 24-25'
+                    subj_25 = df_ret_25.groupby('Subject')['Obtained Marks'].mean().reset_index()
+                    subj_25['Year'] = 'AY 25-26'
+                    
+                    slope_df = pd.concat([subj_24, subj_25])
+                    
+                    fig_slope = px.line(slope_df, x="Year", y="Obtained Marks", color="Subject", markers=True,
+                                        line_shape="linear", text="Obtained Marks")
+                    fig_slope.update_traces(textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10))
+                    fig_slope.update_layout(xaxis_title="", yaxis_title="Average Score", showlegend=True, 
+                                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30))
+                    fig_slope.update_xaxes(showgrid=False, linecolor='black')
+                    fig_slope.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
+                    st.plotly_chart(fig_slope, width='stretch')
+                
+                with col_s2:
+                    st.info("**What this means:**\nThis 'Slopegraph' visualizes momentum. Instead of looking at a single point in time, the steepness and direction of the lines immediately reveal which subjects are improving and which are backsliding over a 12-month period.")
+                    
+                    try:
+                        growth_df = pd.merge(subj_24, subj_25, on='Subject', suffixes=('_24', '_25'))
+                        growth_df['Delta'] = growth_df['Obtained Marks_25'] - growth_df['Obtained Marks_24']
+                        
+                        best_sub = growth_df.loc[growth_df['Delta'].idxmax()]
+                        worst_sub = growth_df.loc[growth_df['Delta'].idxmin()]
+                        
+                        st.success(f"**🔍 Key Insight:**\n**{best_sub['Subject']}** is the strongest performer, growing by {best_sub['Delta']:+.2f} points. Conversely, **{worst_sub['Subject']}** showed the weakest momentum ({worst_sub['Delta']:+.2f} points).")
+                        
+                        st.markdown(f"**💡 Strategic Suggestion:**\nConduct a 'Bright Spot Analysis' on the {best_sub['Subject']} curriculum and teaching methodologies from this past year. Identify the core drivers of that success and cross-pollinate those techniques into the {worst_sub['Subject']} planning for the upcoming semester.")
+                    except:
+                        st.write("Insufficient subject overlap for comparative insights.")
+
+            # ==========================================
+            # TAB 3: GENDER EQUITY
+            # ==========================================
+            with gen_tab:
+                st.markdown("### 🚻 Gender Equity Tracking")
+                
+                if 'Gender' in df_ret_24.columns and 'Gender' in df_ret_25.columns:
+                    col_g1, col_g2 = st.columns([1.5, 1])
+                    
+                    with col_g1:
+                        # Filter out nans
+                        g24 = df_ret_24[df_ret_24['Gender'].isin(['Boy', 'Girl'])].groupby('Gender')['Obtained Marks'].mean().reset_index()
+                        g24['Year'] = 'AY 24-25'
+                        g25 = df_ret_25[df_ret_25['Gender'].isin(['Boy', 'Girl'])].groupby('Gender')['Obtained Marks'].mean().reset_index()
+                        g25['Year'] = 'AY 25-26'
+                        
+                        gen_df = pd.concat([g24, g25])
+                        
+                        fig_gen = px.bar(gen_df, x="Year", y="Obtained Marks", color="Gender", barmode='group',
+                                         color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"},
+                                         text=gen_df['Obtained Marks'].apply(lambda x: f'{x:.2f}'))
+                        fig_gen.update_layout(xaxis_title="", yaxis_title="Average Score", 
+                                              plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                                              legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""))
+                        st.plotly_chart(fig_gen, width='stretch')
+                        
+                    with col_g2:
+                        st.info("**What this means:**\nThis metric tracks if our educational impact is equitable. It ensures that as the overall average rises, one gender isn't being left behind.")
+                        
+                        try:
+                            gap_24 = abs(g24[g24['Gender'] == 'Girl']['Obtained Marks'].values - g24[g24['Gender'] == 'Boy']['Obtained Marks'].values)
+                            gap_25 = abs(g25[g25['Gender'] == 'Girl']['Obtained Marks'].values - g25[g25['Gender'] == 'Boy']['Obtained Marks'].values)
+                            
+                            st.success(f"**🔍 Key Insight:**\nThe performance gap between boys and girls was **{gap_24:.2f} points** last year, and is now **{gap_25:.2f} points** this year.")
+                            
+                            if gap_25 < gap_24:
+                                st.markdown("**💡 Strategic Suggestion:**\nThe equity gap is closing. Current inclusive classroom engagement strategies are working. Maintain the standard.")
+                            else:
+                                st.markdown("**💡 Strategic Suggestion:**\nThe equity gap is widening. We recommend auditing classroom interactions or assessment biases. Consider implementing targeted mentorship or gender-specific encouragement initiatives in underperforming demographics.")
+                        except:
+                            st.write("Insufficient gender data to calculate gaps.")
+                else:
+                    st.warning("Gender data is not consistently available across both academic years to perform this analysis.")
+
+
+            # ==========================================
+            # TAB 4: SINGLE STUDENT (MICRO)
+            # ==========================================
+            with mic_tab:
+                st.markdown("### 🔎 Deep-Dive: Individual Trajectory")
+                
+                all_ids = sorted(df_long['Student ID'].unique())
+                selected_student = st.selectbox("Search Student ID", options=["Select an ID..."] + all_ids)
+                
+                if selected_student != "Select an ID...":
+                    student_data = df_long[df_long['Student ID'] == selected_student].copy()
+                    
+                    if not student_data.empty:
+                        time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
+                        student_data['Timepoint'] = pd.Categorical(student_data['Timepoint'], categories=time_order, ordered=True)
+                        student_data = student_data.sort_values('Timepoint')
+                        
+                        col_ind1, col_ind2 = st.columns()
+                        
+                        with col_ind1:
+                            fig_ind = px.line(student_data, x="Timepoint", y="Obtained Marks", color="Subject", 
+                                              markers=True, line_shape="spline", text="Obtained Marks")
+                            fig_ind.update_traces(textposition="top center", marker=dict(size=12))
+                            fig_ind.update_layout(
+                                xaxis_title="", yaxis_title="Score", 
+                                yaxis=dict(range=[0, max(student_data['Obtained Marks'].max() + 1, 11)]), 
+                                plot_bgcolor="rgba(248, 249, 250, 0.5)", 
+                                margin=dict(l=0, r=0, t=30), hovermode="x unified"
+                            )
+                            fig_ind.update_xaxes(showgrid=True, gridcolor='lightgrey')
+                            fig_ind.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=True)
+                            st.plotly_chart(fig_ind, width='stretch')
+                            
+                        with col_ind2:
+                            st.info("**What this means:**\nThis isolates the ultimate metric of success: *did this specific human being learn and grow over two years?* It reveals seasonal learning loss (drops between Endline and the next Baseline) and overall subject mastery.")
+                            
+                            st.markdown("**💡 Case Management Next Steps:**")
+                            st.markdown("1. **Check for Summer Slide:** Look at the gap between *AY24-25 Endline* and *AY25-26 Baseline*. If there is a sharp drop, this student suffers from severe retention loss during breaks.")
+                            st.markdown("2. **Subject Variance:** If one line is consistently lower than the rest, flag this student for specific subject-level remediation rather than general tutoring.")
+                        
+                        st.markdown("**Underlying Records**")
+                        st.dataframe(student_data[['Academic Year', 'Period', 'Subject', 'Obtained Marks', 'Category']].reset_index(drop=True), use_container_width=True)
+                    else:
+                        st.warning("No data found for this Student ID.")
+                
+    else:
+        st.error(f"⚠️ **Longitudinal Data Missing!** \n\nTo view this module, both `{FILE_24}` and `{FILE_25}` must be placed in the same folder as this script.")
+
+    # CRITICAL: Stop execution here so it doesn't bleed into the Main Impact Dashboard!
     st.stop()
 
 
@@ -171,12 +453,12 @@ with st.sidebar:
     # Added Navigation Buttons
     nav_col1, nav_col2 = st.columns(2)
     with nav_col1:
-        if st.button("🏠 Home", use_container_width=True):
+        if st.button("🏠 Home", use_container_width=True, key="nav_home_main"):
             st.session_state["current_page"] = "home"
             st.rerun()
             
     with nav_col2:
-        if st.button("Sign Out", use_container_width=True):
+        if st.button("Sign Out", use_container_width=True, key="signout_main"):
             # Clear the states and reload the page
             st.session_state["logged_in_email"] = None
             st.session_state["user_first_name"] = "User"
