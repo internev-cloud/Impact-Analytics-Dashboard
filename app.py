@@ -484,7 +484,7 @@ if st.session_state["current_page"] == "longitudinal":
                             student_data['Timepoint'] = pd.Categorical(student_data['Timepoint'], categories=time_order, ordered=True)
                             student_data = student_data.sort_values('Timepoint')
                             
-                            col_ind1, col_ind2 = st.columns()
+                            col_ind1, col_ind2 = st.columns(2)
                             
                             with col_ind1:
                                 fig_ind = px.line(student_data, x="Timepoint", y="Obtained Marks", color="Subject", 
@@ -1289,15 +1289,15 @@ if os.path.exists(DATA_FILE):
                                 
                                 prs = Presentation()
                                 
-                                # Title Slide
-                                slide = prs.slides.add_slide(prs.slide_layouts)
+                                # Title Slide — layout index 0 = "Title Slide"
+                                slide = prs.slides.add_slide(prs.slide_layouts[0])
                                 slide.shapes.title.text = f"AY 25-26 Impact Report"
-                                slide.placeholders.text = f"Donor: {selected_donors}\nGenerated automatically via Streamlit"
+                                slide.placeholders[1].text = f"Donor: {selected_donors}\nGenerated automatically via Streamlit"
                                 
-                                # Summary Slide
-                                slide2 = prs.slides.add_slide(prs.slide_layouts)
+                                # Summary Slide — layout index 1 = "Title and Content"
+                                slide2 = prs.slides.add_slide(prs.slide_layouts[1])
                                 slide2.shapes.title.text = "Executive Summary"
-                                tf = slide2.placeholders.text_frame
+                                tf = slide2.placeholders[1].text_frame
                                 
                                 num_schools = filtered_df['Centre Name'].nunique()
                                 subjects_assessed = ", ".join(filtered_df['Subject'].dropna().unique())
@@ -1319,9 +1319,9 @@ if os.path.exists(DATA_FILE):
                                     p_empty.text = "No baseline data available."
                                     p_empty.level = 1
                                     
-                                # Chart Logic
+                                # Chart Logic — layout index 5 = "Title Only" (best for chart slides)
                                 def add_chart_slide(fig, title_text):
-                                    slide_layout = prs.slide_layouts # Title only layout (Ensuring bracketed index is present)
+                                    slide_layout = prs.slide_layouts[5]  # Title Only layout
                                     chart_slide = prs.slides.add_slide(slide_layout)
                                     chart_slide.shapes.title.text = title_text
                                     img_stream = io.BytesIO()
