@@ -6,3 +6,5 @@ matplotlib
 numpy
 statsmodels
 streamlit-oauth
+python-pptx
+kaleido
