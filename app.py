@@ -1321,7 +1321,7 @@ if os.path.exists(DATA_FILE):
                                     
                                 # Chart Logic
                                 def add_chart_slide(fig, title_text):
-                                    slide_layout = prs.slide_layouts # Title only
+                                    slide_layout = prs.slide_layouts # Title only layout (Ensuring bracketed index is present)
                                     chart_slide = prs.slides.add_slide(slide_layout)
                                     chart_slide.shapes.title.text = title_text
                                     img_stream = io.BytesIO()
