@@ -6,6 +6,7 @@ import os
 import statsmodels.api as sm
 import urllib.request
 import json
+import io
 from streamlit_oauth import OAuth2Component
 
 # ==========================================
@@ -1269,6 +1270,95 @@ if os.path.exists(DATA_FILE):
                         st.warning("⚠️ Could not find matching 'Student ID' and 'Subject' for RTM analysis.")
                 else:
                     st.info("⚠️ Both Baseline and Endline datasets with a valid 'Student ID' column are required for this analysis.")
+
+            # ==========================================
+            # 📥 DRM REPORT GENERATION (PPTX) - APPROACH A
+            # ==========================================
+            with st.sidebar:
+                st.markdown("---")
+                st.markdown("### 📄 DRM Compliance Report")
+                if selected_donors != "All":
+                    report_name = f"AY25-26_Impact_Report_{selected_donors.replace(' ', '_')}.pptx"
+                    
+                    if st.button(f"⚙️ Prepare PPTX for {selected_donors}", use_container_width=True):
+                        with st.spinner("Compiling charts and generating presentation..."):
+                            try:
+                                from pptx import Presentation
+                                from pptx.util import Inches
+                                import io
+                                
+                                prs = Presentation()
+                                
+                                # Title Slide
+                                slide = prs.slides.add_slide(prs.slide_layouts)
+                                slide.shapes.title.text = f"AY 25-26 Impact Report"
+                                slide.placeholders.text = f"Donor: {selected_donors}\nGenerated automatically via Streamlit"
+                                
+                                # Summary Slide
+                                slide2 = prs.slides.add_slide(prs.slide_layouts)
+                                slide2.shapes.title.text = "Executive Summary"
+                                tf = slide2.placeholders.text_frame
+                                
+                                num_schools = filtered_df['Centre Name'].nunique()
+                                subjects_assessed = ", ".join(filtered_df['Subject'].dropna().unique())
+                                
+                                tf.text = f"Total Schools (Centres) Impacted: {num_schools}"
+                                p = tf.add_paragraph()
+                                p.text = f"Subjects Assessed: {subjects_assessed}"
+                                
+                                p2 = tf.add_paragraph()
+                                p2.text = "Grade-wise Student Distribution (Baseline):"
+                                if not base_df.empty:
+                                    grade_counts = base_df.drop_duplicates(subset=['Student ID'])['Grade'].value_counts().sort_index()
+                                    for grade, count in grade_counts.items():
+                                        p_grade = tf.add_paragraph()
+                                        p_grade.text = f"Grade {grade}: {count} students"
+                                        p_grade.level = 1
+                                else:
+                                    p_empty = tf.add_paragraph()
+                                    p_empty.text = "No baseline data available."
+                                    p_empty.level = 1
+                                    
+                                # Chart Logic
+                                def add_chart_slide(fig, title_text):
+                                    slide_layout = prs.slide_layouts # Title only
+                                    chart_slide = prs.slides.add_slide(slide_layout)
+                                    chart_slide.shapes.title.text = title_text
+                                    img_stream = io.BytesIO()
+                                    fig.write_image(img_stream, format="png", engine="kaleido", width=1000, height=550)
+                                    img_stream.seek(0)
+                                    chart_slide.shapes.add_picture(img_stream, Inches(0.5), Inches(1.5), width=Inches(9))
+                                
+                                # Add available figures
+                                if 'fig_rise' in locals(): add_chart_slide(fig_rise, "R.I.S.E Category Shift")
+                                if 'fig_box' in locals(): add_chart_slide(fig_box, "Score Distribution")
+                                if 'fig_base_grade' in locals() and not base_stacked.empty: add_chart_slide(fig_base_grade, "Baseline R.I.S.E by Grade")
+                                if 'fig_end_grade' in locals() and not end_stacked.empty: add_chart_slide(fig_end_grade, "Endline R.I.S.E by Grade")
+                                if 'fig_gen_avg' in locals(): add_chart_slide(fig_gen_avg, "Average Score Trend by Gender")
+
+                                ppt_stream = io.BytesIO()
+                                prs.save(ppt_stream)
+                                ppt_stream.seek(0)
+                                
+                                st.session_state['ready_ppt'] = ppt_stream.getvalue()
+                                st.session_state['ready_ppt_donor'] = selected_donors
+                                st.success("Report prepared successfully!")
+                                
+                            except ImportError:
+                                st.error("⚠️ Missing required libraries! Please run: pip install python-pptx kaleido")
+                            except Exception as e:
+                                st.error(f"⚠️ Error preparing presentation: {e}")
+                                
+                    if 'ready_ppt' in st.session_state and st.session_state.get('ready_ppt_donor') == selected_donors:
+                        st.download_button(
+                            label="⬇️ Download Presentation",
+                            data=st.session_state['ready_ppt'],
+                            file_name=report_name,
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            use_container_width=True
+                        )
+                else:
+                    st.info("💡 Select a specific Donor from the global filters to enable the DRM Report generator.")
 
 else:
     # Empty State Error Message text adjusted to ask for the local file instead of an upload
