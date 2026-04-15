@@ -7,4 +7,4 @@ numpy
 statsmodels
 streamlit-oauth
 python-pptx
-kaleido
+kaleido==0.2.1
