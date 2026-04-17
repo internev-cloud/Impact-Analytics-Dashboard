@@ -1023,14 +1023,38 @@ if os.path.exists(DATA_FILE):
 
                                 # ── Helper: render fig to PNG with axes visible ────────────
                                 def fig_to_png(fig):
-                                    """Apply axis visibility fixes and return BytesIO PNG."""
-                                    fig.update_yaxes(
-                                        showline=True, linecolor="black", linewidth=1,
-                                        showticklabels=True, ticks="outside"
-                                    )
-                                    fig.update_xaxes(
-                                        showline=True, linecolor="black", linewidth=1,
-                                        showticklabels=True, ticks="outside"
+                                    """Apply axis visibility fixes matching the Streamlit on-screen style."""
+                                    fig.update_layout(
+                                        plot_bgcolor="white",
+                                        paper_bgcolor="white",
+                                        font=dict(size=13),
+                                        yaxis=dict(
+                                            showline=True,
+                                            linecolor="black",
+                                            linewidth=1.5,
+                                            showticklabels=True,
+                                            ticks="outside",
+                                            tickcolor="black",
+                                            ticklen=5,
+                                            showgrid=True,
+                                            gridcolor="lightgrey",
+                                            gridwidth=1,
+                                            zeroline=True,
+                                            zerolinecolor="black",
+                                            zerolinewidth=1,
+                                            mirror=False,
+                                        ),
+                                        xaxis=dict(
+                                            showline=True,
+                                            linecolor="black",
+                                            linewidth=1.5,
+                                            showticklabels=True,
+                                            ticks="outside",
+                                            tickcolor="black",
+                                            ticklen=5,
+                                            showgrid=False,
+                                            mirror=False,
+                                        ),
                                     )
                                     img_stream = io.BytesIO()
                                     fig.write_image(img_stream, format="png", engine="kaleido", width=1000, height=550)
