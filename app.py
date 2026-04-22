@@ -263,11 +263,13 @@ if st.session_state["current_page"] == "longitudinal":
                 df_ret_24 = df_el24[df_el24['Student ID'].isin(retained_students)]
                 df_ret_25 = df_el25[df_el25['Student ID'].isin(retained_students)]
                 
-                mig_tab, sub_tab, gen_tab, mic_tab = st.tabs([
+                mig_tab, sub_tab, gen_tab, subj_tab_long, geo_tab_long, centre_tab_long = st.tabs([
                     "📊 Overall Health (Migration)", 
                     "📚 Subject Efficacy", 
                     "🚻 Gender Equity",
-                    "🧑‍🎓 Single Student"
+                    "📚 Subject Wise",
+                    "🗺️ Geographical Wise",
+                    "🏫 Centre Deep Dive"
                 ])
                 
                 with mig_tab:
@@ -366,40 +368,215 @@ if st.session_state["current_page"] == "longitudinal":
                     else:
                         st.warning("Gender data is not consistently available across both academic years to perform this analysis.")
 
-                with mic_tab:
-                    st.markdown("### 🔎 Deep-Dive: Individual Trajectory")
-                    all_retained_ids = sorted([str(x) for x in retained_students])
-                    selected_student = st.selectbox("Search Student ID (Retained Cohort Only)", options=["Select an ID..."] + all_retained_ids, key="student_search_long")
-                    if selected_student != "Select an ID...":
-                        student_data = filtered_df_long[filtered_df_long['Student ID'].astype(str) == selected_student].copy()
-                        if not student_data.empty:
-                            time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
-                            student_data['Timepoint'] = pd.Categorical(student_data['Timepoint'], categories=time_order, ordered=True)
-                            student_data = student_data.sort_values('Timepoint')
-                            col_ind1, col_ind2 = st.columns(2)
-                            with col_ind1:
-                                fig_ind = px.line(student_data, x="Timepoint", y="Obtained Marks", color="Subject", 
-                                                  markers=True, line_shape="spline", text="Obtained Marks")
-                                fig_ind.update_traces(textposition="top center", marker=dict(size=12))
-                                fig_ind.update_layout(
-                                    xaxis_title="", yaxis_title="Score", 
-                                    yaxis=dict(range=[0, max(student_data['Obtained Marks'].max() + 1, 11)]), 
-                                    plot_bgcolor="rgba(248, 249, 250, 0.5)", 
-                                    margin=dict(l=0, r=0, t=30), hovermode="x unified"
-                                )
-                                fig_ind.update_xaxes(showgrid=True, gridcolor='lightgrey')
-                                fig_ind.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=True)
-                                st.plotly_chart(fig_ind, width='stretch')
-                            with col_ind2:
-                                st.info("**What this means:**\nThis isolates the ultimate metric of success: *did this specific human being learn and grow over two years?* It reveals seasonal learning loss (drops between Endline and the next Baseline) and overall subject mastery.")
-                                st.markdown("**💡 Case Management Next Steps:**")
-                                st.markdown("1. **Check for Summer Slide:** Look at the gap between *AY24-25 Endline* and *AY25-26 Baseline*. If there is a sharp drop, this student suffers from severe retention loss during breaks.")
-                                st.markdown("2. **Subject Variance:** If one line is consistently lower than the rest, flag this student for specific subject-level remediation rather than general tutoring.")
-                            st.markdown("**Underlying Records**")
-                            st.dataframe(student_data[['Academic Year', 'Period', 'Subject', 'Obtained Marks', 'Category']].reset_index(drop=True), use_container_width=True)
+                # ==========================================
+                # NEW TAB 1: SUBJECT WISE
+                # ==========================================
+                with subj_tab_long:
+                    st.markdown("### 📚 Subject-Wise YoY Comparison (All Timepoints)")
+                    if 'Subject' in filtered_df_long.columns:
+                        all_subjects = sorted(filtered_df_long['Subject'].dropna().unique())
+                        selected_subj_long = st.selectbox("Select Subject", ["All"] + list(all_subjects), key="subj_long_select")
+                        df_subj_view = filtered_df_long.copy()
+                        if selected_subj_long != "All":
+                            df_subj_view = df_subj_view[df_subj_view['Subject'].astype(str) == selected_subj_long]
+
+                        time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
+                        df_subj_view['Timepoint'] = pd.Categorical(df_subj_view['Timepoint'], categories=time_order, ordered=True)
+
+                        col_sw1, col_sw2 = st.columns(2)
+                        with col_sw1:
+                            st.markdown("#### Average Score Across Timepoints")
+                            subj_avg = df_subj_view.groupby(['Timepoint', 'Subject'])['Obtained Marks'].mean().reset_index()
+                            fig_sw_avg = px.line(subj_avg, x="Timepoint", y="Obtained Marks", color="Subject",
+                                                 markers=True, line_shape="linear", text="Obtained Marks")
+                            fig_sw_avg.update_traces(textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10))
+                            fig_sw_avg.update_layout(xaxis_title="", yaxis_title="Average Score",
+                                                     plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30))
+                            fig_sw_avg.update_xaxes(showgrid=False, linecolor='black')
+                            fig_sw_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
+                            st.plotly_chart(fig_sw_avg, width='stretch')
+
+                        with col_sw2:
+                            st.markdown("#### R.I.S.E Category Shift by Subject")
+                            if 'Category' in df_subj_view.columns:
+                                subj_cat = df_subj_view.groupby(['Subject', 'Timepoint', 'Category']).size().reset_index(name='Count')
+                                subj_cat['Percentage'] = subj_cat.groupby(['Subject', 'Timepoint'])['Count'].transform(lambda x: x / x.sum() * 100)
+                                tp_options = [t for t in time_order if t in subj_cat['Timepoint'].values]
+                                selected_tp = st.selectbox("Select Timepoint", tp_options, index=len(tp_options)-1, key="tp_subj_long")
+                                subj_cat_tp = subj_cat[subj_cat['Timepoint'] == selected_tp]
+                                fig_sw_rise = px.bar(subj_cat_tp, x="Subject", y="Percentage", color="Category",
+                                                     color_discrete_map={"Reviving": "#f27c48", "Initiating": "#0094c9", "Shaping": "#00964d", "Evolving": "#ed1c2d"},
+                                                     text=subj_cat_tp['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
+                                                     category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]})
+                                fig_sw_rise.update_layout(barmode='stack', yaxis_title="% of Students",
+                                                          margin=dict(l=0, r=0, t=30),
+                                                          legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""))
+                                st.plotly_chart(fig_sw_rise, width='stretch')
+
+                        st.markdown("---")
+                        st.markdown("#### Subject-Wise Net Score Change (BL → EL per Year)")
+                        for yr in ['AY24-25', 'AY25-26']:
+                            yr_bl = df_subj_view[df_subj_view['Timepoint'] == f'{yr} Baseline']
+                            yr_el = df_subj_view[df_subj_view['Timepoint'] == f'{yr} Endline']
+                            if not yr_bl.empty and not yr_el.empty:
+                                bl_avg = yr_bl.groupby('Subject')['Obtained Marks'].mean()
+                                el_avg = yr_el.groupby('Subject')['Obtained Marks'].mean()
+                                delta_df = (el_avg - bl_avg).reset_index()
+                                delta_df.columns = ['Subject', 'Net Change']
+                                delta_df['Color'] = delta_df['Net Change'].apply(lambda x: 'Improved' if x >= 0 else 'Declined')
+                                fig_delta = px.bar(delta_df, x="Subject", y="Net Change", color="Color",
+                                                   color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
+                                                   text=delta_df['Net Change'].apply(lambda x: f'{x:+.2f}'),
+                                                   title=f"{yr}: Net Score Change (Endline − Baseline)")
+                                fig_delta.add_hline(y=0, line_dash="dash", line_color="black")
+                                fig_delta.update_layout(showlegend=False, margin=dict(l=0, r=0, t=50),
+                                                        plot_bgcolor="rgba(0,0,0,0)")
+                                st.plotly_chart(fig_delta, width='stretch')
+                    else:
+                        st.warning("Subject data not available.")
+
+                # ==========================================
+                # NEW TAB 2: GEOGRAPHICAL WISE
+                # ==========================================
+                with geo_tab_long:
+                    st.markdown("### 🗺️ Geographical YoY Comparison")
+                    if 'State' in filtered_df_long.columns:
+                        time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
+                        filtered_df_long['Timepoint'] = pd.Categorical(filtered_df_long['Timepoint'], categories=time_order, ordered=True)
+
+                        col_g1, col_g2 = st.columns(2)
+                        with col_g1:
+                            st.markdown("#### State-wise Average Score (All Timepoints)")
+                            state_avg = filtered_df_long.groupby(['State', 'Timepoint'])['Obtained Marks'].mean().reset_index()
+                            fig_state_avg = px.line(state_avg, x="Timepoint", y="Obtained Marks", color="State",
+                                                    markers=True, line_shape="linear", text="Obtained Marks")
+                            fig_state_avg.update_traces(textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=9))
+                            fig_state_avg.update_layout(xaxis_title="", yaxis_title="Average Score",
+                                                        plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30))
+                            fig_state_avg.update_xaxes(showgrid=False, linecolor='black')
+                            fig_state_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
+                            st.plotly_chart(fig_state_avg, width='stretch')
+
+                        with col_g2:
+                            st.markdown("#### State-wise R.I.S.E Shift")
+                            if 'Category' in filtered_df_long.columns:
+                                tp_options_geo = [t for t in time_order if t in filtered_df_long['Timepoint'].values]
+                                selected_tp_geo = st.selectbox("Select Timepoint", tp_options_geo, index=len(tp_options_geo)-1, key="tp_geo_long")
+                                state_cat = filtered_df_long[filtered_df_long['Timepoint'] == selected_tp_geo]
+                                state_cat_grp = state_cat.groupby(['State', 'Category']).size().reset_index(name='Count')
+                                state_cat_grp['Percentage'] = state_cat_grp.groupby('State')['Count'].transform(lambda x: x / x.sum() * 100)
+                                fig_state_rise = px.bar(state_cat_grp, x="State", y="Percentage", color="Category",
+                                                        color_discrete_map={"Reviving": "#f27c48", "Initiating": "#0094c9", "Shaping": "#00964d", "Evolving": "#ed1c2d"},
+                                                        text=state_cat_grp['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
+                                                        category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]})
+                                fig_state_rise.update_layout(barmode='stack', yaxis_title="% of Students",
+                                                             margin=dict(l=0, r=0, t=30),
+                                                             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""))
+                                st.plotly_chart(fig_state_rise, width='stretch')
+
+                        st.markdown("---")
+                        st.markdown("#### State-wise YoY Net Change (Endline AY24-25 → Endline AY25-26)")
+                        el24_state = filtered_df_long[filtered_df_long['Timepoint'] == 'AY24-25 Endline'].groupby('State')['Obtained Marks'].mean()
+                        el25_state = filtered_df_long[filtered_df_long['Timepoint'] == 'AY25-26 Endline'].groupby('State')['Obtained Marks'].mean()
+                        if not el24_state.empty and not el25_state.empty:
+                            yoy_state = (el25_state - el24_state).dropna().reset_index()
+                            yoy_state.columns = ['State', 'YoY Change']
+                            yoy_state['Color'] = yoy_state['YoY Change'].apply(lambda x: 'Improved' if x >= 0 else 'Declined')
+                            fig_yoy_state = px.bar(yoy_state, x="State", y="YoY Change", color="Color",
+                                                   color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
+                                                   text=yoy_state['YoY Change'].apply(lambda x: f'{x:+.2f}'))
+                            fig_yoy_state.add_hline(y=0, line_dash="dash", line_color="black")
+                            fig_yoy_state.update_layout(showlegend=False, margin=dict(l=0, r=0, t=30),
+                                                        plot_bgcolor="rgba(0,0,0,0)", xaxis_title="", yaxis_title="YoY Score Change")
+                            st.plotly_chart(fig_yoy_state, width='stretch')
                         else:
-                            st.warning("No data found for this Student ID.")
-                    
+                            st.info("Both AY24-25 and AY25-26 Endline data are needed for YoY state comparison.")
+                    else:
+                        st.warning("State data not available.")
+
+                # ==========================================
+                # NEW TAB 3: CENTRE DEEP DIVE
+                # ==========================================
+                with centre_tab_long:
+                    st.markdown("### 🏫 Centre Deep Dive — Individual Centre Comparison")
+                    if 'Centre Name' in filtered_df_long.columns:
+                        time_order = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
+                        filtered_df_long['Timepoint'] = pd.Categorical(filtered_df_long['Timepoint'], categories=time_order, ordered=True)
+
+                        all_centres_long = sorted(filtered_df_long['Centre Name'].dropna().unique())
+                        selected_centre_deep = st.selectbox("Select Centre for Deep Dive", all_centres_long, key="centre_deep_long")
+                        df_centre_deep = filtered_df_long[filtered_df_long['Centre Name'].astype(str) == selected_centre_deep]
+
+                        if not df_centre_deep.empty:
+                            col_c1, col_c2 = st.columns(2)
+                            with col_c1:
+                                st.markdown("#### Average Score Trajectory")
+                                centre_avg = df_centre_deep.groupby(['Timepoint', 'Subject'])['Obtained Marks'].mean().reset_index()
+                                fig_c_avg = px.line(centre_avg, x="Timepoint", y="Obtained Marks", color="Subject",
+                                                    markers=True, line_shape="linear", text="Obtained Marks")
+                                fig_c_avg.update_traces(textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10))
+                                fig_c_avg.update_layout(xaxis_title="", yaxis_title="Average Score",
+                                                        plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30))
+                                fig_c_avg.update_xaxes(showgrid=False, linecolor='black')
+                                fig_c_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
+                                st.plotly_chart(fig_c_avg, width='stretch')
+
+                            with col_c2:
+                                st.markdown("#### R.I.S.E Distribution")
+                                if 'Category' in df_centre_deep.columns:
+                                    centre_cat = df_centre_deep.groupby(['Timepoint', 'Category']).size().reset_index(name='Count')
+                                    centre_cat['Percentage'] = centre_cat.groupby('Timepoint')['Count'].transform(lambda x: x / x.sum() * 100)
+                                    fig_c_rise = px.bar(centre_cat, x="Timepoint", y="Percentage", color="Category",
+                                                        color_discrete_map={"Reviving": "#f27c48", "Initiating": "#0094c9", "Shaping": "#00964d", "Evolving": "#ed1c2d"},
+                                                        text=centre_cat['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
+                                                        category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"],
+                                                                         "Timepoint": time_order})
+                                    fig_c_rise.update_layout(barmode='stack', yaxis_title="% of Students",
+                                                             margin=dict(l=0, r=0, t=30),
+                                                             legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""))
+                                    st.plotly_chart(fig_c_rise, width='stretch')
+
+                            st.markdown("---")
+                            st.markdown("#### Centre vs All-Centre Benchmark (Endlines Only)")
+                            el24_centre = df_centre_deep[df_centre_deep['Timepoint'] == 'AY24-25 Endline']['Obtained Marks'].mean()
+                            el25_centre = df_centre_deep[df_centre_deep['Timepoint'] == 'AY25-26 Endline']['Obtained Marks'].mean()
+                            el24_all = filtered_df_long[filtered_df_long['Timepoint'] == 'AY24-25 Endline']['Obtained Marks'].mean()
+                            el25_all = filtered_df_long[filtered_df_long['Timepoint'] == 'AY25-26 Endline']['Obtained Marks'].mean()
+
+                            bench_data = pd.DataFrame({
+                                'Group': [selected_centre_deep, 'All Centres', selected_centre_deep, 'All Centres'],
+                                'Timepoint': ['AY24-25 Endline', 'AY24-25 Endline', 'AY25-26 Endline', 'AY25-26 Endline'],
+                                'Avg Score': [el24_centre, el24_all, el25_centre, el25_all]
+                            }).dropna(subset=['Avg Score'])
+
+                            if not bench_data.empty:
+                                fig_bench = px.bar(bench_data, x="Timepoint", y="Avg Score", color="Group",
+                                                   barmode='group', text=bench_data['Avg Score'].apply(lambda x: f'{x:.2f}'))
+                                fig_bench.update_layout(xaxis_title="", yaxis_title="Average Score",
+                                                        margin=dict(l=0, r=0, t=30),
+                                                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""))
+                                st.plotly_chart(fig_bench, width='stretch')
+
+                            st.markdown("---")
+                            st.markdown("#### Gender Breakdown at This Centre")
+                            if 'Gender' in df_centre_deep.columns:
+                                gen_centre = df_centre_deep[~df_centre_deep['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])]
+                                if not gen_centre.empty:
+                                    gen_avg_c = gen_centre.groupby(['Timepoint', 'Gender'])['Obtained Marks'].mean().reset_index()
+                                    fig_gen_c = px.line(gen_avg_c, x="Timepoint", y="Obtained Marks", color="Gender",
+                                                        markers=True, line_shape="linear",
+                                                        color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"})
+                                    fig_gen_c.update_traces(marker=dict(size=10))
+                                    fig_gen_c.update_layout(xaxis_title="", yaxis_title="Average Score",
+                                                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30))
+                                    st.plotly_chart(fig_gen_c, width='stretch')
+                                else:
+                                    st.info("No valid gender data for this centre.")
+                        else:
+                            st.warning("No data found for this centre.")
+                    else:
+                        st.warning("Centre Name data not available.")
+
     else:
         st.error(f"⚠️ **Longitudinal Data Missing!** \n\nTo view this module, both `{FILE_24}` and `{FILE_25}` must be placed in the same folder as this script.")
 
