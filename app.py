@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import os
-import statsmodels.api as sm
 import urllib.request
 import json
 import io
@@ -20,40 +19,45 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 700;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
+    [data-testid="stMetricValue"] { font-size: 2rem; font-weight: 700; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
     .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: transparent;
-        border-radius: 4px 4px 0px 0px;
-        padding-top: 10px;
-        padding-bottom: 10px;
+        height: 50px; white-space: pre-wrap; background-color: transparent;
+        border-radius: 4px 4px 0px 0px; padding-top: 10px; padding-bottom: 10px;
+    }
+    .student-card {
+        background: #f8f9fa; border-radius: 10px; padding: 16px 20px;
+        border-left: 5px solid #0094c9; margin-bottom: 12px;
     }
 </style>
 """, unsafe_allow_html=True)
 
-
 # ==========================================
-# FIX 4 — MODULE-LEVEL COLOR CONSTANTS
-# Single source of truth; both modules import from here.
+# MODULE-LEVEL CONSTANTS
 # ==========================================
-COLOR_MAP = {'Baseline': '#636EFA', 'Endline': '#00CC96'}
-RISE_COLORS = {
-    "Reviving":  "#f27c48",
+COLOR_MAP    = {'Baseline': '#636EFA', 'Endline': '#00CC96'}
+AY_COLOR_MAP = {'AY24-25': '#636EFA', 'AY25-26': '#00CC96'}
+RISE_COLORS  = {
+    "Reviving":   "#f27c48",
     "Initiating": "#0094c9",
-    "Shaping":   "#00964d",
-    "Evolving":  "#ed1c2d",
+    "Shaping":    "#00964d",
+    "Evolving":   "#ed1c2d",
 }
-# Longitudinal module uses the same palette — one dict, two names.
 RISE_COLORS_LONG = RISE_COLORS
-TIME_ORDER = ['AY24-25 Baseline', 'AY24-25 Endline', 'AY25-26 Baseline', 'AY25-26 Endline']
-AY_ORDER   = ['AY24-25', 'AY25-26']
+RISE_ORDER   = ["Reviving", "Initiating", "Shaping", "Evolving"]
+AY_ORDER     = ["AY24-25", "AY25-26"]
+
+# AY 25-26 uses 2-letter state codes; normalise to full names for consistent joins
+STATE_ABBR = {
+    "AP": "Andhra Pradesh", "AS": "Assam",         "BR": "Bihar",
+    "GJ": "Gujarat",        "JH": "Jharkhand",     "KA": "Karnataka",
+    "MH": "Maharashtra",    "MP": "Madhya Pradesh", "OD": "Odisha",
+    "RJ": "Rajasthan",      "TN": "Tamil Nadu",     "TS": "Telangana",
+    "UK": "Uttarakhand",    "UP": "Uttar Pradesh",
+}
+
+# AY 24-25 uses "Maths"; AY 25-26 uses "Math" — normalise to "Math"
+SUBJECT_NORM = {"Maths": "Math"}
 
 
 # ==========================================
@@ -62,43 +66,39 @@ AY_ORDER   = ['AY24-25', 'AY25-26']
 try:
     CLIENT_ID     = st.secrets["GOOGLE_CLIENT_ID"]
     CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
-except FileNotFoundError:
+except (FileNotFoundError, KeyError):
     st.error(
-        "Missing `.streamlit/secrets.toml` file or Streamlit Cloud Secrets. "
+        "Missing `.streamlit/secrets.toml` or Streamlit Cloud Secrets. "
         "Please ensure your Google Client ID and Secret are configured."
     )
     st.stop()
 
-AUTHORIZE_URL     = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL         = "https://oauth2.googleapis.com/token"
-REVOKE_TOKEN_URL  = "https://oauth2.googleapis.com/revoke"
+AUTHORIZE_URL    = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL        = "https://oauth2.googleapis.com/token"
+REVOKE_TOKEN_URL = "https://oauth2.googleapis.com/revoke"
 
-if "logged_in_email"  not in st.session_state:
-    st.session_state["logged_in_email"]  = None
-if "user_first_name"  not in st.session_state:
-    st.session_state["user_first_name"]  = "User"
+for _k, _v in [("logged_in_email", None), ("user_first_name", "User")]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
 
 if not st.session_state["logged_in_email"]:
-    col1, col2, col3 = st.columns(3)
+    _, col2, _ = st.columns(3)
     with col2:
-        st.write("")
-        st.write("")
+        st.write(""); st.write("")
         try:
             st.image("evidyaloka_logo.png", width=320)
         except Exception:
-            st.empty()
+            pass
         st.markdown(
             "<h2 style='text-align:center;color:#0094c9;'>Student Analytics Portal</h2>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            "<p style='text-align:center;'>Please sign in with your @evidyaloka.org email to access the dashboard.</p>",
+            "<p style='text-align:center;'>Sign in with your @evidyaloka.org email.</p>",
             unsafe_allow_html=True,
         )
         st.markdown("---")
-        oauth2 = OAuth2Component(
-            CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, REVOKE_TOKEN_URL
-        )
+        oauth2 = OAuth2Component(CLIENT_ID, CLIENT_SECRET, AUTHORIZE_URL, TOKEN_URL, REVOKE_TOKEN_URL)
         result = oauth2.authorize_button(
             name="Sign in with Google",
             icon="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg",
@@ -109,14 +109,13 @@ if not st.session_state["logged_in_email"]:
         )
         if result and "token" in result:
             id_token = result["token"]["id_token"]
-            # FIX 1 — id_token list bug: was `id_token = id_token` (no-op).
             if isinstance(id_token, list):
-                id_token = id_token[0]
+                id_token = id_token[0]          # FIX: was a no-op
             verify_url = f"https://oauth2.googleapis.com/tokeninfo?id_token={id_token}"
             try:
-                with urllib.request.urlopen(verify_url) as response:
-                    user_info = json.loads(response.read().decode())
-                st.session_state["logged_in_email"] = user_info.get("email")
+                with urllib.request.urlopen(verify_url) as resp:
+                    user_info = json.loads(resp.read().decode())
+                st.session_state["logged_in_email"]  = user_info.get("email")
                 st.session_state["user_first_name"] = user_info.get("given_name", "User")
                 st.rerun()
             except Exception as e:
@@ -126,118 +125,200 @@ if not st.session_state["logged_in_email"]:
 
 
 # ==========================================
-# FIX 3 — SHARED FILTER SIDEBAR BUILDER
-# Replaces the near-identical 60-line blocks that appeared in both
-# the main dashboard and the longitudinal module.
-# Returns filtered_df and the dict of selected values.
-# key_prefix keeps widget keys unique across pages.
+# SHARED SIDEBAR FILTER BUILDER
 # ==========================================
-def build_filter_sidebar(df: pd.DataFrame, key_prefix: str) -> tuple[pd.DataFrame, dict]:
+def build_filter_sidebar(df: pd.DataFrame, key_prefix: str):
     """
     Renders cascading State → Donor → Centre → Subject → Grade → Gender
-    filters in the sidebar and returns (filtered_df, selections).
+    filters and returns (filtered_df, selections_dict).
+    key_prefix keeps widget keys unique between the two modules.
     """
-    selections = {}
+    sel = {}
     st.sidebar.header("🎯 Global Filters")
 
+    def _opts(series):
+        return ["All"] + sorted(series.dropna().astype(str).unique())
+
     # State
-    states = ["All"] + sorted(df["State"].dropna().astype(str).unique()) if "State" in df.columns else ["All"]
-    sel_state = st.sidebar.selectbox("Select State", states, index=0, key=f"{key_prefix}_state")
-    selections["state"] = sel_state
-    dff = df[df["State"].astype(str) == sel_state].copy() if sel_state != "All" else df.copy()
+    states = _opts(df["State"]) if "State" in df.columns else ["All"]
+    s = st.sidebar.selectbox("Select State", states, key=f"{key_prefix}_state")
+    sel["state"] = s
+    dff = df[df["State"].astype(str) == s].copy() if s != "All" else df.copy()
 
     # Donor
-    donors = ["All"] + sorted(dff["Donor"].dropna().astype(str).unique()) if "Donor" in dff.columns else ["All"]
-    sel_donor = st.sidebar.selectbox("Select Donor", donors, index=0, key=f"{key_prefix}_donor")
-    selections["donor"] = sel_donor
-    if sel_donor != "All":
-        dff = dff[dff["Donor"].astype(str) == sel_donor]
+    donors = _opts(dff["Donor"]) if "Donor" in dff.columns else ["All"]
+    d = st.sidebar.selectbox("Select Donor", donors, key=f"{key_prefix}_donor")
+    sel["donor"] = d
+    if d != "All":
+        dff = dff[dff["Donor"].astype(str) == d]
 
     # Centre
-    centres = ["All"] + sorted(dff["Centre Name"].dropna().astype(str).unique()) if "Centre Name" in dff.columns else ["All"]
-    sel_centre = st.sidebar.selectbox("Select Centre", centres, index=0, key=f"{key_prefix}_centre")
-    selections["centre"] = sel_centre
-    if sel_centre != "All":
-        dff = dff[dff["Centre Name"].astype(str) == sel_centre]
+    centres = _opts(dff["Centre Name"]) if "Centre Name" in dff.columns else ["All"]
+    c = st.sidebar.selectbox("Select Centre", centres, key=f"{key_prefix}_centre")
+    sel["centre"] = c
+    if c != "All":
+        dff = dff[dff["Centre Name"].astype(str) == c]
 
     # Subject
-    subjects = ["All"] + sorted(dff["Subject"].dropna().astype(str).unique()) if "Subject" in dff.columns else ["All"]
-    sel_subject = st.sidebar.selectbox("Select Subject", subjects, index=0, key=f"{key_prefix}_subject")
-    selections["subject"] = sel_subject
-    if sel_subject != "All":
-        dff = dff[dff["Subject"].astype(str) == sel_subject]
+    subjects = _opts(dff["Subject"]) if "Subject" in dff.columns else ["All"]
+    sub = st.sidebar.selectbox("Select Subject", subjects, key=f"{key_prefix}_subject")
+    sel["subject"] = sub
+    if sub != "All":
+        dff = dff[dff["Subject"].astype(str) == sub]
 
-    # Grade (multi-select; longitudinal module filters by AY24-25 cohort grade)
+    # Grade — longitudinal uses AY24-25 cohort grade logic
     if key_prefix == "long":
-        df_base_year = dff[dff["Academic Year"] == "AY24-25"] if "Academic Year" in dff.columns else dff
-        grades = sorted(df_base_year["Grade"].dropna().astype(str).unique()) if "Grade" in df_base_year.columns else []
+        base_yr = dff[dff["Academic Year"] == "AY24-25"] if "Academic Year" in dff.columns else dff
+        grades = sorted(base_yr["Grade"].dropna().astype(str).unique()) if "Grade" in base_yr.columns else []
         sel_grades = st.sidebar.multiselect(
-            "Select AY 24-25 Grade (Cohort Tracking)", options=grades, default=grades,
-            key=f"{key_prefix}_grade",
-            help="Select the student's grade in AY 24-25. The dashboard will automatically track them into their promoted grade for AY 25-26.",
+            "Select AY 24-25 Grade (Cohort)", options=grades, default=grades, key=f"{key_prefix}_grade",
+            help="Tracks students from their AY 24-25 grade into their promoted grade in AY 25-26.",
         )
         if sel_grades:
-            cohort_ids = df_base_year[df_base_year["Grade"].astype(str).isin(sel_grades)]["Student ID"].unique()
+            cohort_ids = base_yr[base_yr["Grade"].astype(str).isin(sel_grades)]["Student ID"].unique()
             dff = dff[dff["Student ID"].isin(cohort_ids)]
         else:
             dff = dff.iloc[0:0]
     else:
         grades = sorted(dff["Grade"].dropna().astype(str).unique()) if "Grade" in dff.columns else []
-        sel_grades = st.sidebar.multiselect(
-            "Select Grade(s)", options=grades, default=grades, key=f"{key_prefix}_grade"
-        )
-        if sel_grades:
-            dff = dff[dff["Grade"].astype(str).isin(sel_grades)]
-        else:
-            dff = dff.iloc[0:0]
-    selections["grades"] = sel_grades
+        sel_grades = st.sidebar.multiselect("Select Grade(s)", options=grades, default=grades, key=f"{key_prefix}_grade")
+        dff = dff[dff["Grade"].astype(str).isin(sel_grades)] if sel_grades else dff.iloc[0:0]
+    sel["grades"] = sel_grades
 
-    # Gender
+    # Gender (only present in AY 25-26 records; filter gracefully)
     if "Gender" in dff.columns:
-        valid = dff.dropna(subset=["Gender"])
-        valid = valid[~valid["Gender"].astype(str).str.lower().isin(["nan", "none", "null", ""])]
+        valid = dff[~dff["Gender"].astype(str).str.lower().isin(["nan", "none", "null", "unknown", ""])]
         genders = sorted(valid["Gender"].astype(str).unique())
         if genders:
-            sel_genders = st.sidebar.multiselect(
+            sel_g = st.sidebar.multiselect(
                 "Select Gender(s)", options=genders, default=genders, key=f"{key_prefix}_gender"
             )
-            dff = dff[dff["Gender"].astype(str).isin(sel_genders)]
-            selections["genders"] = sel_genders
+            dff = dff[dff["Gender"].astype(str).isin(sel_g)]
+            sel["genders"] = sel_g
         else:
-            selections["genders"] = []
+            sel["genders"] = []
     else:
-        selections["genders"] = []
+        sel["genders"] = []
 
-    return dff, selections
+    return dff, sel
 
 
 # ==========================================
-# APP ROUTER / HOMEPAGE GATEKEEPER
+# APP ROUTER / HOME PAGE
 # ==========================================
 if "current_page" not in st.session_state:
     st.session_state["current_page"] = "home"
 
 if st.session_state["current_page"] == "home":
-    st.write("")
-    st.write("")
+    st.write(""); st.write("")
     st.title(f"👋 Welcome, {st.session_state['user_first_name']}!")
     st.markdown(
         "<p style='color:gray;font-size:1.1em;'>Select an application below to continue.</p>",
         unsafe_allow_html=True,
     )
     st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, *_ = st.columns(4)
     with col1:
         st.markdown("<h1 style='text-align:center;font-size:4rem;'>📈</h1>", unsafe_allow_html=True)
         if st.button("Impact Analytics Dashboard", use_container_width=True):
-            st.session_state["current_page"] = "dashboard"
-            st.rerun()
+            st.session_state["current_page"] = "dashboard"; st.rerun()
     with col2:
         st.markdown("<h1 style='text-align:center;font-size:4rem;'>🏛️</h1>", unsafe_allow_html=True)
         if st.button("Longitudinal Analysis", use_container_width=True):
-            st.session_state["current_page"] = "longitudinal"
-            st.rerun()
+            st.session_state["current_page"] = "longitudinal"; st.rerun()
     st.stop()
+
+
+# ==========================================
+# DATA LOADING — LONGITUDINAL MODULE
+# Combines both workbooks into a single normalised DataFrame.
+# Key normalisations applied here (not repeated downstream):
+#   - State abbreviations → full names
+#   - "Maths" → "Math"
+#   - Gender title-case + strip
+#   - Student ID → clean string (Int64 path for numeric, uppercase for alphanumeric)
+# ==========================================
+FILE_24 = "EL-BL-Data-AY-24-25.xlsx"
+FILE_25 = "BL-EL-AY-25-26-Final-AllSubjects.xlsx"
+
+
+@st.cache_data(show_spinner=False)
+def load_multi_year_data(src_24, src_25):
+    def clean_sheet(df_raw, year: str, period: str) -> pd.DataFrame:
+        if df_raw.empty:
+            return pd.DataFrame()
+        df = df_raw.copy()
+
+        # Rubrics → Category
+        if "Rubrics" in df.columns and "Category" not in df.columns:
+            df.rename(columns={"Rubrics": "Category"}, inplace=True)
+
+        # Robust Student ID cleaning
+        raw_ids     = df.get("Student ID", pd.Series(dtype=object)).copy()
+        numeric_ids = pd.to_numeric(raw_ids, errors="coerce")
+        is_num      = numeric_ids.notna()
+        df["Student ID"] = pd.NA
+        df.loc[is_num,  "Student ID"] = numeric_ids[is_num].astype("Int64").astype(str).str.strip()
+        df.loc[~is_num, "Student ID"] = raw_ids[~is_num].astype(str).str.strip().str.upper()
+        df.loc[df["Student ID"].astype(str).str.upper().isin(
+            ["NA", "NAN", "NONE", "NULL", "<NA>", ""]
+        ), "Student ID"] = pd.NA
+
+        # Normalise State (expand abbreviations)
+        if "State" in df.columns:
+            df["State"] = df["State"].astype(str).str.strip().map(lambda x: STATE_ABBR.get(x, x))
+
+        # Normalise Subject
+        if "Subject" in df.columns:
+            df["Subject"] = df["Subject"].astype(str).str.strip().map(lambda x: SUBJECT_NORM.get(x, x))
+
+        # Gender — AY 24-25 has no Gender column; add placeholder
+        if "Gender" in df.columns:
+            df["Gender"] = (
+                df["Gender"].astype(str).str.strip().str.title()
+                .str.replace(r"\s+", "", regex=True)   # "Boy " → "Boy"
+            )
+        else:
+            df["Gender"] = "Unknown"
+
+        # Other string columns
+        for col in ["Centre Name", "Donor", "Category"]:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.strip()
+
+        if "Grade" in df.columns:
+            df["Grade"] = df["Grade"].astype(str).str.replace(r"\.0$", "", regex=True)
+
+        df["Obtained Marks"] = pd.to_numeric(df.get("Obtained Marks"), errors="coerce")
+        df["Total Marks"]    = pd.to_numeric(df.get("Total Marks"),    errors="coerce")
+        df["Pct Score"]      = (df["Obtained Marks"] / df["Total Marks"] * 100).round(1)
+
+        df["Academic Year"] = year
+        df["Period"]        = period
+        df["Timepoint"]     = f"{year} {period}"
+
+        keep = [
+            "State", "Centre Name", "Donor", "Subject", "Grade", "Student ID",
+            "Gender", "Obtained Marks", "Total Marks", "Pct Score",
+            "Category", "Academic Year", "Period", "Timepoint",
+        ]
+        return df[[c for c in keep if c in df.columns]].dropna(subset=["Student ID", "Obtained Marks"])
+
+    try:
+        xls24 = pd.ExcelFile(src_24)
+        xls25 = pd.ExcelFile(src_25)
+        sheets24 = xls24.sheet_names
+        sheets25 = xls25.sheet_names
+
+        bl24 = clean_sheet(pd.read_excel(src_24, sheet_name=sheets24[0]), "AY24-25", "Baseline")
+        el24 = clean_sheet(pd.read_excel(src_24, sheet_name=sheets24[1] if len(sheets24) > 1 else 0), "AY24-25", "Endline")
+        bl25 = clean_sheet(pd.read_excel(src_25, sheet_name=sheets25[0]), "AY25-26", "Baseline")
+        el25 = clean_sheet(pd.read_excel(src_25, sheet_name=sheets25[1] if len(sheets25) > 1 else 0), "AY25-26", "Endline")
+
+        return pd.concat([bl24, el24, bl25, el25], ignore_index=True)
+    except Exception as e:
+        st.error(f"Error loading multi-year data: {e}")
+        return None
 
 
 # ==========================================
@@ -246,725 +327,683 @@ if st.session_state["current_page"] == "home":
 if st.session_state["current_page"] == "longitudinal":
     st.title("🏛️ Strategic Longitudinal Analysis")
     st.markdown(
-        "<p style='color:gray;font-size:1.1em;'>Year-over-Year Trajectories, Equity Tracking, "
-        "and Strategic Insights (AY 24-25 vs AY 25-26)</p>",
+        "<p style='color:gray;font-size:1.1em;'>Year-over-Year Trajectories & Student Deep-Dives "
+        "(AY 24-25 vs AY 25-26 — Endline to Endline)</p>",
         unsafe_allow_html=True,
     )
     st.markdown("---")
 
-    @st.cache_data
-    def load_multi_year_data(file_24, file_25):
-        def clean_sheet(df, year, period):
-            if df.empty:
-                return pd.DataFrame()
-            cols = [
-                'State', 'Centre Name', 'Donor', 'Subject', 'Grade',
-                'Student ID', 'Gender', 'Obtained Marks', 'Rubrics', 'Category',
-            ]
-            df_clean = df[[c for c in cols if c in df.columns]].copy()
-            if 'Rubrics' in df_clean.columns:
-                df_clean.rename(columns={'Rubrics': 'Category'}, inplace=True)
-
-            df_clean['Academic Year'] = year
-            df_clean['Period']        = period
-            df_clean['Timepoint']     = f"{year} {period}"
-            df_clean['Obtained Marks'] = pd.to_numeric(df_clean['Obtained Marks'], errors='coerce')
-
-            # Robust Student ID cleaning (handles float, scientific notation,
-            # alphanumeric IDs, and invisible Unicode characters)
-            raw_ids     = df_clean['Student ID'].copy()
-            numeric_ids = pd.to_numeric(raw_ids, errors='coerce')
-            is_numeric  = numeric_ids.notna()
-
-            df_clean['Student ID'] = pd.NA
-
-            df_clean.loc[is_numeric, 'Student ID'] = (
-                numeric_ids[is_numeric]
-                .astype('Int64')
-                .astype(str)
-                .str.strip()
-            )
-            df_clean.loc[~is_numeric, 'Student ID'] = (
-                raw_ids[~is_numeric]
-                .astype(str)
-                .str.strip()
-                .str.upper()
-            )
-
-            invalid = df_clean['Student ID'].astype(str).str.upper().isin(
-                ['NA', 'NAN', 'NONE', 'NULL', '<NA>', '']
-            )
-            df_clean.loc[invalid, 'Student ID'] = pd.NA
-
-            for col in ['State', 'Centre Name', 'Donor', 'Subject', 'Gender', 'Category']:
-                if col in df_clean.columns:
-                    df_clean[col] = df_clean[col].astype(str).str.strip()
-            if 'Gender' in df_clean.columns:
-                df_clean['Gender'] = df_clean['Gender'].str.title()
-            if 'Grade' in df_clean.columns:
-                df_clean['Grade'] = df_clean['Grade'].astype(str).str.replace(r'\.0$', '', regex=True)
-
-            return df_clean.dropna(subset=['Student ID', 'Obtained Marks'])
-
-        try:
-            xls_24   = pd.ExcelFile(file_24)
-            df_24_bl = clean_sheet(pd.read_excel(file_24, sheet_name=0), 'AY24-25', 'Baseline')
-            df_24_el = clean_sheet(
-                pd.read_excel(file_24, sheet_name=1 if len(xls_24.sheet_names) > 1 else 0),
-                'AY24-25', 'Endline',
-            )
-            xls_25   = pd.ExcelFile(file_25)
-            df_25_bl = clean_sheet(pd.read_excel(file_25, sheet_name=0), 'AY25-26', 'Baseline')
-            df_25_el = clean_sheet(
-                pd.read_excel(file_25, sheet_name=1 if len(xls_25.sheet_names) > 1 else 0),
-                'AY25-26', 'Endline',
-            )
-            return pd.concat([df_24_bl, df_24_el, df_25_bl, df_25_el], ignore_index=True)
-        except Exception as e:
-            st.error(f"Error loading multi-year data: {e}")
-            return None
-
-    FILE_24 = "EL-BL-Data-AY-24-25.xlsx"
-    FILE_25 = "BL-EL-AY-25-26-Final-AllSubjects.xlsx"
-
-    # ── Sidebar nav + optional file uploaders ──────────────────────
+    # Sidebar nav
     with st.sidebar:
         try:
             st.image("evidyaloka_logo.png", width=273)
         except Exception:
-            st.warning("⚠️ Logo not found.")
-        st.success(f"👤 **Logged in as:** {st.session_state['user_first_name']}")
-        nav_col1, nav_col2 = st.columns(2)
-        with nav_col1:
+            pass
+        st.success(f"👤 **{st.session_state['user_first_name']}**")
+        nc1, nc2 = st.columns(2)
+        with nc1:
             if st.button("🏠 Home", use_container_width=True, key="nav_home_long"):
-                st.session_state["current_page"] = "home"
-                st.rerun()
-        with nav_col2:
+                st.session_state["current_page"] = "home"; st.rerun()
+        with nc2:
             if st.button("Sign Out", use_container_width=True, key="signout_long"):
-                for k in ["logged_in_email", "user_first_name"]:
-                    st.session_state[k] = None if k == "logged_in_email" else "User"
-                st.session_state["current_page"] = "home"
+                st.session_state.update({"logged_in_email": None, "user_first_name": "User", "current_page": "home"})
                 st.rerun()
         st.markdown("---")
         st.info(
-            "💡 **Module Note:** This section analyses the overlap between AY 24-25 "
-            "and AY 25-26 to track long-term strategic growth."
+            "💡 **YoY logic:** All comparison charts use **Endline scores only** "
+            "(AY24-25 Endline vs AY25-26 Endline). "
+            "Tabs 1–3 additionally require matched Student IDs across both years."
         )
 
-    # FIX 2 — file uploader fallback for longitudinal module
-    # If the expected files are not on disk, offer upload widgets.
+    # File resolution — disk first, then uploader
     src_24, src_25 = FILE_24, FILE_25
     if not (os.path.exists(FILE_24) and os.path.exists(FILE_25)):
-        st.warning(
-            f"⚠️ One or both data files (`{FILE_24}`, `{FILE_25}`) were not found on disk. "
-            "Upload them below to continue."
-        )
-        up_24 = st.file_uploader(f"Upload AY 24-25 data ({FILE_24})", type=["xlsx"], key="up_24")
-        up_25 = st.file_uploader(f"Upload AY 25-26 data ({FILE_25})", type=["xlsx"], key="up_25")
-        if up_24 is None or up_25 is None:
-            st.info("Please upload both files to load the Longitudinal Analysis module.")
+        st.warning("Data files not found on disk. Upload them below.")
+        up24 = st.file_uploader(f"Upload {FILE_24}", type=["xlsx"], key="up_24")
+        up25 = st.file_uploader(f"Upload {FILE_25}", type=["xlsx"], key="up_25")
+        if not (up24 and up25):
+            st.info("Please upload both files to continue.")
             st.stop()
-        src_24, src_25 = up_24, up_25
+        src_24, src_25 = up24, up25
 
-    with st.spinner("Synthesizing Multi-Year Intelligence..."):
+    with st.spinner("Loading and harmonising multi-year data…"):
         df_long = load_multi_year_data(src_24, src_25)
 
-    filtered_df_long = pd.DataFrame()
+    if df_long is None or df_long.empty:
+        st.error("Could not load data. Check the uploaded files.")
+        st.stop()
 
-    if df_long is not None and not df_long.empty:
-        with st.sidebar:
-            filtered_df_long, long_sel = build_filter_sidebar(df_long, key_prefix="long")
+    # Apply sidebar filters
+    with st.sidebar:
+        filtered_df_long, long_sel = build_filter_sidebar(df_long, key_prefix="long")
 
-        if filtered_df_long.empty:
-            st.warning("⚠️ No data available for the selected filters. Please adjust your criteria.")
+    if filtered_df_long.empty:
+        st.warning("⚠️ No data for the selected filters. Please adjust your criteria.")
+        st.stop()
+
+    # ── Core slices ───────────────────────────────────────────────
+    df_el24     = filtered_df_long[filtered_df_long["Timepoint"] == "AY24-25 Endline"].copy()
+    df_el25     = filtered_df_long[filtered_df_long["Timepoint"] == "AY25-26 Endline"].copy()
+    df_endlines = filtered_df_long[filtered_df_long["Period"] == "Endline"].copy()
+    df_endlines["Academic Year"] = pd.Categorical(df_endlines["Academic Year"], categories=AY_ORDER, ordered=True)
+
+    # Retained cohort (matched Student IDs in both endlines)
+    ids_24    = set(df_el24["Student ID"].dropna().unique())
+    ids_25    = set(df_el25["Student ID"].dropna().unique())
+    retained  = ids_24 & ids_25
+    no_overlap = len(retained) == 0
+    df_ret_24 = df_el24[df_el24["Student ID"].isin(retained)] if not no_overlap else pd.DataFrame()
+    df_ret_25 = df_el25[df_el25["Student ID"].isin(retained)] if not no_overlap else pd.DataFrame()
+
+    # Debug expander
+    with st.expander("🛠️ Debug: ID Matching", expanded=False):
+        dc1, dc2 = st.columns(2)
+        with dc1:
+            st.markdown("**AY 24-25 Endline**")
+            st.write(f"Rows: `{len(df_el24)}` | Unique IDs: `{len(ids_24)}`")
+            st.dataframe(
+                df_el24["Student ID"].dropna().drop_duplicates().head(5).reset_index(drop=True).rename("Student ID"),
+                use_container_width=True,
+            )
+        with dc2:
+            st.markdown("**AY 25-26 Endline**")
+            st.write(f"Rows: `{len(df_el25)}` | Unique IDs: `{len(ids_25)}`")
+            st.dataframe(
+                df_el25["Student ID"].dropna().drop_duplicates().head(5).reset_index(drop=True).rename("Student ID"),
+                use_container_width=True,
+            )
+        st.write(f"**Intersection size:** `{len(retained)}`")
+        if no_overlap and ids_24 and ids_25:
+            one24, one25 = next(iter(ids_24)), next(iter(ids_25))
+            st.write(f"AY24 sample → `{repr(one24)}` (len={len(one24)})")
+            st.write(f"AY25 sample → `{repr(one25)}` (len={len(one25)})")
+            st.caption("repr() exposes invisible characters: \\xa0 (non-breaking space), \\ufeff (BOM), etc.")
+
+    # ── TABS ──────────────────────────────────────────────────────
+    (mig_tab, sub_tab, gen_tab,
+     subj_tab, geo_tab, centre_tab,
+     student_tab) = st.tabs([
+        "📊 Migration",
+        "📚 Subject Efficacy",
+        "🚻 Gender Equity",
+        "📚 Subject Wise",
+        "🗺️ Geographical",
+        "🏫 Centre Deep Dive",
+        "🔍 Student Lookup",
+    ])
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 1: MIGRATION (retained cohort)
+    # ─────────────────────────────────────────────────────────────
+    with mig_tab:
+        st.markdown("### 🧱 Structural Tier Migration (Retained Cohort Only)")
+        if no_overlap:
+            st.warning(
+                "⚠️ No overlapping Student IDs found between AY 24-25 and AY 25-26 Endlines. "
+                "Use the Subject Wise / Geographical / Centre tabs for aggregate YoY comparison, "
+                "or the Student Lookup tab for individual records."
+            )
         else:
-            mig_tab, sub_tab, gen_tab, subj_tab_long, geo_tab_long, centre_tab_long = st.tabs([
-                "📊 Overall Health (Migration)",
-                "📚 Subject Efficacy",
-                "🚻 Gender Equity",
-                "📚 Subject Wise",
-                "🗺️ Geographical Wise",
-                "🏫 Centre Deep Dive",
-            ])
-
-            # Retained-cohort IDs (used by first 3 tabs only)
-            df_el24 = filtered_df_long[filtered_df_long['Timepoint'] == 'AY24-25 Endline']
-            df_el25 = filtered_df_long[filtered_df_long['Timepoint'] == 'AY25-26 Endline']
-
-            if df_el24.empty or df_el25.empty:
-                st.warning(
-                    "⚠️ One or both endline years returned no rows after filtering. "
-                    "Check whether the Subject or Grade filter is excluding an entire year. "
-                    "Subject names may differ between workbooks (e.g. 'Math' vs 'Mathematics')."
+            col_m1, col_m2 = st.columns([1.5, 1])
+            with col_m1:
+                cat24 = df_ret_24["Category"].value_counts(normalize=True).reset_index()
+                cat24.columns = ["Category", "Pct"]; cat24["Year"] = "AY 24-25 Endline"
+                cat25 = df_ret_25["Category"].value_counts(normalize=True).reset_index()
+                cat25.columns = ["Category", "Pct"]; cat25["Year"] = "AY 25-26 Endline"
+                cdf = pd.concat([cat24, cat25]); cdf["Pct"] *= 100
+                fig_cat = px.bar(
+                    cdf, x="Year", y="Pct", color="Category",
+                    color_discrete_map=RISE_COLORS,
+                    text=cdf["Pct"].apply(lambda x: f"{x:.1f}%"),
+                    category_orders={"Category": RISE_ORDER,
+                                     "Year": ["AY 24-25 Endline", "AY 25-26 Endline"]},
                 )
-
-            ids_24 = set(df_el24['Student ID'].dropna().unique())
-            ids_25 = set(df_el25['Student ID'].dropna().unique())
-            retained_students = ids_24.intersection(ids_25)
-
-            # Diagnostic expander — remove once overlap issue is resolved
-            with st.expander("🛠️ Debug: ID Matching", expanded=False):
-                dcol1, dcol2 = st.columns(2)
-                with dcol1:
-                    st.markdown("**AY 24-25 Endline**")
-                    st.write(f"Rows: `{len(df_el24)}`")
-                    st.write(f"Unique Student IDs: `{len(ids_24)}`")
-                    sample_24 = (
-                        df_el24['Student ID'].dropna().drop_duplicates().head(5).reset_index(drop=True)
+                fig_cat.update_layout(
+                    barmode="stack", xaxis_title="", yaxis_title="% of Cohort",
+                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                    legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
+                )
+                st.plotly_chart(fig_cat, use_container_width=True)
+            with col_m2:
+                st.info(
+                    "Only students present in **both** years' endlines are shown here. "
+                    "Shrinking red/orange (Reviving/Initiating) and growing green (Shaping/Evolving) "
+                    "sections indicate upward migration."
+                )
+                try:
+                    rv24 = cat24[cat24["Category"] == "Reviving"]["Pct"].values
+                    rv25 = cat25[cat25["Category"] == "Reviving"]["Pct"].values
+                    diff = (rv25[0] if len(rv25) else 0) * 100 - (rv24[0] if len(rv24) else 0) * 100
+                    st.success(f"**🔍 Key Insight:** 'Reviving' proportion changed by **{diff:+.1f}%** YoY.")
+                    st.markdown(
+                        "**💡** Excellent — the struggling base is shrinking. Keep investing in remedial strategies."
+                        if diff < 0 else
+                        "**💡** The struggling cohort is growing. Consider targeted Tier-1 small-group intervention."
                     )
-                    st.dataframe(sample_24.rename("Student ID"), use_container_width=True)
-                with dcol2:
-                    st.markdown("**AY 25-26 Endline**")
-                    st.write(f"Rows: `{len(df_el25)}`")
-                    st.write(f"Unique Student IDs: `{len(ids_25)}`")
-                    sample_25 = (
-                        df_el25['Student ID'].dropna().drop_duplicates().head(5).reset_index(drop=True)
+                except Exception:
+                    st.write("Insufficient category data for insights.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 2: SUBJECT EFFICACY (retained cohort)
+    # ─────────────────────────────────────────────────────────────
+    with sub_tab:
+        st.markdown("### 📈 YoY Subject Slopegraph (Retained Cohort)")
+        if no_overlap:
+            st.warning("⚠️ No overlapping Student IDs. Use the **Subject Wise** tab for all-student comparison.")
+        else:
+            s24 = df_ret_24.groupby("Subject")["Obtained Marks"].mean().reset_index(); s24["Year"] = "AY 24-25"
+            s25 = df_ret_25.groupby("Subject")["Obtained Marks"].mean().reset_index(); s25["Year"] = "AY 25-26"
+            slope_df = pd.concat([s24, s25])
+            col_s1, col_s2 = st.columns([1.5, 1])
+            with col_s1:
+                fig_slope = px.line(
+                    slope_df, x="Year", y="Obtained Marks", color="Subject",
+                    markers=True, text="Obtained Marks",
+                )
+                fig_slope.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10))
+                fig_slope.update_layout(
+                    xaxis_title="", yaxis_title="Avg Score",
+                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                )
+                fig_slope.update_xaxes(showgrid=False, linecolor="black")
+                fig_slope.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
+                st.plotly_chart(fig_slope, use_container_width=True)
+            with col_s2:
+                try:
+                    gd = pd.merge(s24, s25, on="Subject", suffixes=("_24", "_25"))
+                    gd["Delta"] = gd["Obtained Marks_25"] - gd["Obtained Marks_24"]
+                    best  = gd.loc[gd["Delta"].idxmax()]
+                    worst = gd.loc[gd["Delta"].idxmin()]
+                    st.success(
+                        f"**{best['Subject']}** grew most ({best['Delta']:+.2f} pts). "
+                        f"**{worst['Subject']}** showed least momentum ({worst['Delta']:+.2f} pts)."
                     )
-                    st.dataframe(sample_25.rename("Student ID"), use_container_width=True)
-                st.markdown("---")
-                st.write(f"**Intersection size:** `{len(retained_students)}`")
-                if len(retained_students) == 0 and ids_24 and ids_25:
-                    one_24 = next(iter(ids_24))
-                    one_25 = next(iter(ids_25))
-                    st.markdown("**Character-level inspection of first sample ID from each year:**")
-                    st.write(f"AY24 → repr: `{repr(one_24)}` | len: `{len(one_24)}`")
-                    st.write(f"AY25 → repr: `{repr(one_25)}` | len: `{len(one_25)}`")
-                    st.caption(
-                        "Look for: extra spaces, leading zeros (0001 vs 1), "
-                        "Unicode non-breaking spaces (\\xa0), or BOM characters (\\ufeff). "
-                        "repr() exposes all of these."
-                    )
+                    st.markdown(f"**💡** Cross-pollinate {best['Subject']} techniques into {worst['Subject']} planning.")
+                except Exception:
+                    st.write("Insufficient subject overlap for insights.")
 
-            no_overlap = len(retained_students) == 0
-            df_ret_24  = df_el24[df_el24['Student ID'].isin(retained_students)] if not no_overlap else pd.DataFrame()
-            df_ret_25  = df_el25[df_el25['Student ID'].isin(retained_students)] if not no_overlap else pd.DataFrame()
-
-            # ── TAB 1: MIGRATION ───────────────────────────────────────
-            with mig_tab:
-                st.markdown("### 🧱 Structural Tier Migration (Retained Cohort)")
-                if no_overlap:
-                    st.warning(
-                        "⚠️ No overlapping Student IDs were found between AY 24-25 and AY 25-26 "
-                        "for the current filters. This tab requires matched students across both years. "
-                        "Use the **Subject Wise**, **Geographical Wise**, or **Centre Deep Dive** tabs "
-                        "for year-on-year comparison without requiring matched IDs."
-                    )
-                else:
-                    col_m1, col_m2 = st.columns([1.5, 1])
-                    with col_m1:
-                        if 'Category' in df_ret_24.columns:
-                            cat_24 = df_ret_24['Category'].value_counts(normalize=True).reset_index()
-                            cat_24.columns = ['Category', 'Percentage']
-                            cat_24['Year'] = 'AY 24-25 (Endline)'
-                            cat_25 = df_ret_25['Category'].value_counts(normalize=True).reset_index()
-                            cat_25.columns = ['Category', 'Percentage']
-                            cat_25['Year'] = 'AY 25-26 (Endline)'
-                            cat_df = pd.concat([cat_24, cat_25])
-                            cat_df['Percentage'] *= 100
-                            fig_cat = px.bar(
-                                cat_df, x="Year", y="Percentage", color="Category",
-                                color_discrete_map=RISE_COLORS_LONG,
-                                text=cat_df['Percentage'].apply(lambda x: f'{x:.1f}%'),
-                                category_orders={
-                                    "Category": ["Reviving", "Initiating", "Shaping", "Evolving"],
-                                    "Year": ["AY 24-25 (Endline)", "AY 25-26 (Endline)"],
-                                },
-                            )
-                            fig_cat.update_layout(
-                                barmode='stack', xaxis_title="", yaxis_title="% of Cohort",
-                                plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                            )
-                            st.plotly_chart(fig_cat, width='stretch')
-                    with col_m2:
-                        st.info(
-                            "**What this means:**\nThis chart strips away the noise and looks only at "
-                            "students who stayed with us for two full years. A successful program will show "
-                            "the red/orange sections shrinking as students migrate upward into green sections."
-                        )
-                        try:
-                            rev_24 = cat_24[cat_24['Category'] == 'Reviving']['Percentage'].values
-                            rev_25 = cat_25[cat_25['Category'] == 'Reviving']['Percentage'].values
-                            rev_24_val = rev_24[0] * 100 if len(rev_24) else 0
-                            rev_25_val = rev_25[0] * 100 if len(rev_25) else 0
-                            rev_diff   = rev_25_val - rev_24_val
-                            st.success(
-                                f"**🔍 Key Insight:**\nThe proportion of critically struggling students "
-                                f"('Reviving') changed by **{rev_diff:+.1f}%** Year-over-Year."
-                            )
-                            if rev_diff < 0:
-                                st.markdown(
-                                    "**💡 Strategic Suggestion:**\nExcellent progress. The base is shrinking. "
-                                    "Keep investing in current foundational remedial strategies."
-                                )
-                            else:
-                                st.markdown(
-                                    "**💡 Strategic Suggestion:**\nThe struggling cohort is stagnating or growing. "
-                                    "Consider implementing targeted small-group tutoring specifically for 'Reviving' students."
-                                )
-                        except Exception:
-                            st.write("Insufficient category data for insights.")
-
-            # ── TAB 2: SUBJECT EFFICACY ────────────────────────────────
-            with sub_tab:
-                st.markdown("### 📈 YoY Subject Trajectory (Slopegraph)")
-                if no_overlap:
-                    st.warning(
-                        "⚠️ No overlapping Student IDs were found between AY 24-25 and AY 25-26. "
-                        "This slopegraph requires matched students. Use the **Subject Wise** tab for a "
-                        "full subject comparison across all timepoints without requiring matched IDs."
-                    )
-                else:
-                    col_s1, col_s2 = st.columns([1.5, 1])
-                    with col_s1:
-                        subj_24 = df_ret_24.groupby('Subject')['Obtained Marks'].mean().reset_index()
-                        subj_24['Year'] = 'AY 24-25'
-                        subj_25 = df_ret_25.groupby('Subject')['Obtained Marks'].mean().reset_index()
-                        subj_25['Year'] = 'AY 25-26'
-                        slope_df = pd.concat([subj_24, subj_25])
-                        fig_slope = px.line(
-                            slope_df, x="Year", y="Obtained Marks", color="Subject",
-                            markers=True, line_shape="linear", text="Obtained Marks",
-                        )
-                        fig_slope.update_traces(
-                            textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10)
-                        )
-                        fig_slope.update_layout(
-                            xaxis_title="", yaxis_title="Average Score", showlegend=True,
-                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                        )
-                        fig_slope.update_xaxes(showgrid=False, linecolor='black')
-                        fig_slope.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
-                        st.plotly_chart(fig_slope, width='stretch')
-                    with col_s2:
-                        st.info(
-                            "**What this means:**\nThis 'Slopegraph' visualizes momentum. The steepness "
-                            "and direction of the lines reveal which subjects are improving and which are "
-                            "backsliding over a 12-month period."
-                        )
-                        try:
-                            growth_df  = pd.merge(subj_24, subj_25, on='Subject', suffixes=('_24', '_25'))
-                            growth_df['Delta'] = growth_df['Obtained Marks_25'] - growth_df['Obtained Marks_24']
-                            best_sub  = growth_df.loc[growth_df['Delta'].idxmax()]
-                            worst_sub = growth_df.loc[growth_df['Delta'].idxmin()]
-                            st.success(
-                                f"**🔍 Key Insight:**\n**{best_sub['Subject']}** is the strongest performer, "
-                                f"growing by {best_sub['Delta']:+.2f} points. **{worst_sub['Subject']}** showed "
-                                f"the weakest momentum ({worst_sub['Delta']:+.2f} points)."
-                            )
-                            st.markdown(
-                                f"**💡 Strategic Suggestion:**\nConduct a 'Bright Spot Analysis' on the "
-                                f"{best_sub['Subject']} curriculum and cross-pollinate those techniques into "
-                                f"{worst_sub['Subject']} planning for the upcoming semester."
-                            )
-                        except Exception:
-                            st.write("Insufficient subject overlap for comparative insights.")
-
-            # ── TAB 3: GENDER EQUITY ──────────────────────────────────
-            with gen_tab:
-                st.markdown("### 🚻 Gender Equity Tracking")
-                if no_overlap:
-                    st.warning(
-                        "⚠️ No overlapping Student IDs were found between AY 24-25 and AY 25-26. "
-                        "Gender equity tracking requires matched students across both years."
-                    )
-                elif 'Gender' in df_ret_24.columns and 'Gender' in df_ret_25.columns:
-                    col_g1, col_g2 = st.columns([1.5, 1])
-                    with col_g1:
-                        g24 = (
-                            df_ret_24[df_ret_24['Gender'].isin(['Boy', 'Girl'])]
-                            .groupby('Gender')['Obtained Marks'].mean().reset_index()
-                        )
-                        g24['Year'] = 'AY 24-25'
-                        g25 = (
-                            df_ret_25[df_ret_25['Gender'].isin(['Boy', 'Girl'])]
-                            .groupby('Gender')['Obtained Marks'].mean().reset_index()
-                        )
-                        g25['Year'] = 'AY 25-26'
-                        gen_df = pd.concat([g24, g25])
-                        fig_gen = px.bar(
-                            gen_df, x="Year", y="Obtained Marks", color="Gender", barmode='group',
-                            color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"},
-                            text=gen_df['Obtained Marks'].apply(lambda x: f'{x:.2f}'),
-                        )
-                        fig_gen.update_layout(
-                            xaxis_title="", yaxis_title="Average Score",
-                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                        )
-                        st.plotly_chart(fig_gen, width='stretch')
-                    with col_g2:
-                        st.info(
-                            "**What this means:**\nThis metric tracks if our educational impact is equitable. "
-                            "It ensures that as the overall average rises, one gender isn't being left behind."
-                        )
-                        try:
-                            gap_24 = abs(
-                                g24[g24['Gender'] == 'Girl']['Obtained Marks'].values[0]
-                                - g24[g24['Gender'] == 'Boy']['Obtained Marks'].values[0]
-                            )
-                            gap_25 = abs(
-                                g25[g25['Gender'] == 'Girl']['Obtained Marks'].values[0]
-                                - g25[g25['Gender'] == 'Boy']['Obtained Marks'].values[0]
-                            )
-                            st.success(
-                                f"**🔍 Key Insight:**\nThe performance gap between boys and girls was "
-                                f"**{gap_24:.2f} points** last year, and is now **{gap_25:.2f} points** this year."
-                            )
-                            if gap_25 < gap_24:
-                                st.markdown(
-                                    "**💡 Strategic Suggestion:**\nThe equity gap is closing. Current inclusive "
-                                    "classroom engagement strategies are working. Maintain the standard."
-                                )
-                            else:
-                                st.markdown(
-                                    "**💡 Strategic Suggestion:**\nThe equity gap is widening. Consider implementing "
-                                    "targeted mentorship or gender-specific encouragement initiatives."
-                                )
-                        except Exception:
-                            st.write("Insufficient gender data to calculate gaps.")
-                else:
-                    st.warning("Gender data is not consistently available across both academic years.")
-
-            # ── TAB 4: SUBJECT WISE — Endline YoY only ────────────────
-            with subj_tab_long:
-                st.markdown("### 📚 Subject-Wise YoY Comparison (Endline Only)")
-                df_endlines = filtered_df_long[filtered_df_long['Period'] == 'Endline'].copy()
-
-                if 'Subject' in df_endlines.columns:
-                    all_subjects = sorted(df_endlines['Subject'].dropna().unique())
-                    selected_subj_long = st.selectbox(
-                        "Select Subject", ["All"] + list(all_subjects), key="subj_long_select"
-                    )
-                    df_subj_view = df_endlines.copy()
-                    if selected_subj_long != "All":
-                        df_subj_view = df_subj_view[df_subj_view['Subject'].astype(str) == selected_subj_long]
-
-                    df_subj_view['Academic Year'] = pd.Categorical(
-                        df_subj_view['Academic Year'], categories=AY_ORDER, ordered=True
-                    )
-
-                    col_sw1, col_sw2 = st.columns(2)
-                    with col_sw1:
-                        st.markdown("#### Average Endline Score (YoY)")
-                        subj_avg = (
-                            df_subj_view
-                            .groupby(['Academic Year', 'Subject'], observed=True)['Obtained Marks']
-                            .mean().reset_index()
-                        )
-                        subj_avg = subj_avg.sort_values('Academic Year')
-                        fig_sw_avg = px.line(
-                            subj_avg, x="Academic Year", y="Obtained Marks", color="Subject",
-                            markers=True, line_shape="linear", text="Obtained Marks",
-                        )
-                        fig_sw_avg.update_traces(
-                            textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10)
-                        )
-                        fig_sw_avg.update_layout(
-                            xaxis_title="", yaxis_title="Average Endline Score",
-                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                        )
-                        fig_sw_avg.update_xaxes(showgrid=False, linecolor='black')
-                        fig_sw_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
-                        st.plotly_chart(fig_sw_avg, width='stretch')
-
-                    with col_sw2:
-                        st.markdown("#### R.I.S.E Category Shift by Subject")
-                        if 'Category' in df_subj_view.columns:
-                            ay_options = [ay for ay in AY_ORDER if ay in df_subj_view['Academic Year'].values]
-                            selected_ay = st.selectbox(
-                                "Select Academic Year", ay_options,
-                                index=len(ay_options) - 1, key="ay_subj_long",
-                            )
-                            df_subj_ay = df_subj_view[df_subj_view['Academic Year'] == selected_ay]
-                            subj_cat = (
-                                df_subj_ay
-                                .groupby(['Subject', 'Category'], observed=True)
-                                .size().reset_index(name='Count')
-                            )
-                            subj_cat['Percentage'] = (
-                                subj_cat.groupby('Subject')['Count']
-                                .transform(lambda x: x / x.sum() * 100)
-                            )
-                            fig_sw_rise = px.bar(
-                                subj_cat, x="Subject", y="Percentage", color="Category",
-                                color_discrete_map=RISE_COLORS_LONG,
-                                text=subj_cat['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                                category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                            )
-                            fig_sw_rise.update_layout(
-                                barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
-                                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                            )
-                            st.plotly_chart(fig_sw_rise, width='stretch')
-
-                    st.markdown("---")
-                    st.markdown("#### Subject-Wise YoY Score Change (AY24-25 Endline → AY25-26 Endline)")
-                    el_24_subj = (
-                        df_endlines[df_endlines['Academic Year'] == 'AY24-25']
-                        .groupby('Subject')['Obtained Marks'].mean()
-                    )
-                    el_25_subj = (
-                        df_endlines[df_endlines['Academic Year'] == 'AY25-26']
-                        .groupby('Subject')['Obtained Marks'].mean()
-                    )
-                    yoy_subj = (el_25_subj - el_24_subj).dropna().reset_index()
-                    yoy_subj.columns = ['Subject', 'YoY Change']
-                    yoy_subj['Color'] = yoy_subj['YoY Change'].apply(
-                        lambda x: 'Improved' if x >= 0 else 'Declined'
-                    )
-                    if not yoy_subj.empty:
-                        fig_yoy_subj = px.bar(
-                            yoy_subj, x="Subject", y="YoY Change", color="Color",
-                            color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
-                            text=yoy_subj['YoY Change'].apply(lambda x: f'{x:+.2f}'),
-                        )
-                        fig_yoy_subj.add_hline(y=0, line_dash="dash", line_color="black")
-                        fig_yoy_subj.update_layout(
-                            showlegend=False, margin=dict(l=0, r=0, t=30),
-                            plot_bgcolor="rgba(0,0,0,0)", xaxis_title="",
-                            yaxis_title="YoY Endline Score Change",
-                        )
-                        st.plotly_chart(fig_yoy_subj, width='stretch')
-                    else:
-                        st.info(
-                            "Both AY24-25 and AY25-26 Endline data are needed for this comparison. "
-                            "Check that current filters do not exclude one academic year entirely."
-                        )
-                else:
-                    st.warning("Subject data not available.")
-
-            # ── TAB 5: GEOGRAPHICAL WISE — Endline YoY only ───────────
-            with geo_tab_long:
-                st.markdown("### 🗺️ Geographical YoY Comparison (Endline Only)")
-                df_geo = filtered_df_long[filtered_df_long['Period'] == 'Endline'].copy()
-
-                if 'State' in df_geo.columns:
-                    df_geo['Academic Year'] = pd.Categorical(
-                        df_geo['Academic Year'], categories=AY_ORDER, ordered=True
-                    )
-
-                    col_g1, col_g2 = st.columns(2)
-                    with col_g1:
-                        st.markdown("#### State-wise Average Endline Score (YoY)")
-                        state_avg = (
-                            df_geo.groupby(['State', 'Academic Year'], observed=True)['Obtained Marks']
-                            .mean().reset_index()
-                        )
-                        fig_state_avg = px.line(
-                            state_avg, x="Academic Year", y="Obtained Marks", color="State",
-                            markers=True, line_shape="linear", text="Obtained Marks",
-                        )
-                        fig_state_avg.update_traces(
-                            textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=9)
-                        )
-                        fig_state_avg.update_layout(
-                            xaxis_title="", yaxis_title="Average Endline Score",
-                            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                        )
-                        fig_state_avg.update_xaxes(showgrid=False, linecolor='black')
-                        fig_state_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
-                        st.plotly_chart(fig_state_avg, width='stretch')
-
-                    with col_g2:
-                        st.markdown("#### State-wise R.I.S.E Shift")
-                        if 'Category' in df_geo.columns:
-                            ay_opts_geo = [ay for ay in AY_ORDER if ay in df_geo['Academic Year'].values]
-                            selected_ay_geo = st.selectbox(
-                                "Select Academic Year", ay_opts_geo,
-                                index=len(ay_opts_geo) - 1, key="ay_geo_long",
-                            )
-                            state_cat_filtered = df_geo[df_geo['Academic Year'] == selected_ay_geo]
-                            state_cat_grp = (
-                                state_cat_filtered.groupby(['State', 'Category'])
-                                .size().reset_index(name='Count')
-                            )
-                            state_cat_grp['Percentage'] = (
-                                state_cat_grp.groupby('State')['Count']
-                                .transform(lambda x: x / x.sum() * 100)
-                            )
-                            fig_state_rise = px.bar(
-                                state_cat_grp, x="State", y="Percentage", color="Category",
-                                color_discrete_map=RISE_COLORS_LONG,
-                                text=state_cat_grp['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                                category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                            )
-                            fig_state_rise.update_layout(
-                                barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
-                                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                            )
-                            st.plotly_chart(fig_state_rise, width='stretch')
-
-                    st.markdown("---")
-                    st.markdown("#### State-wise YoY Score Change (AY24-25 Endline → AY25-26 Endline)")
-                    el24_state = (
-                        df_geo[df_geo['Academic Year'] == 'AY24-25']
-                        .groupby('State')['Obtained Marks'].mean()
-                    )
-                    el25_state = (
-                        df_geo[df_geo['Academic Year'] == 'AY25-26']
-                        .groupby('State')['Obtained Marks'].mean()
-                    )
-                    if not el24_state.empty and not el25_state.empty:
-                        yoy_state = (el25_state - el24_state).dropna().reset_index()
-                        yoy_state.columns = ['State', 'YoY Change']
-                        yoy_state['Color'] = yoy_state['YoY Change'].apply(
-                            lambda x: 'Improved' if x >= 0 else 'Declined'
-                        )
-                        fig_yoy_state = px.bar(
-                            yoy_state, x="State", y="YoY Change", color="Color",
-                            color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
-                            text=yoy_state['YoY Change'].apply(lambda x: f'{x:+.2f}'),
-                        )
-                        fig_yoy_state.add_hline(y=0, line_dash="dash", line_color="black")
-                        fig_yoy_state.update_layout(
-                            showlegend=False, margin=dict(l=0, r=0, t=30),
-                            plot_bgcolor="rgba(0,0,0,0)", xaxis_title="",
-                            yaxis_title="YoY Endline Score Change",
-                        )
-                        st.plotly_chart(fig_yoy_state, width='stretch')
-                    else:
-                        st.info("Both AY24-25 and AY25-26 Endline data are needed for YoY state comparison.")
-                else:
-                    st.warning("State data not available.")
-
-            # ── TAB 6: CENTRE DEEP DIVE — Endline YoY only ────────────
-            with centre_tab_long:
-                st.markdown("### 🏫 Centre Deep Dive — Individual Centre YoY Comparison (Endline Only)")
-                df_cdd = filtered_df_long[filtered_df_long['Period'] == 'Endline'].copy()
-
-                if 'Centre Name' in df_cdd.columns:
-                    df_cdd['Academic Year'] = pd.Categorical(
-                        df_cdd['Academic Year'], categories=AY_ORDER, ordered=True
-                    )
-                    all_centres_long = sorted(df_cdd['Centre Name'].dropna().unique())
-                    selected_centre_deep = st.selectbox(
-                        "Select Centre for Deep Dive", all_centres_long, key="centre_deep_long"
-                    )
-                    df_centre_deep = df_cdd[df_cdd['Centre Name'].astype(str) == selected_centre_deep]
-
-                    if not df_centre_deep.empty:
-                        col_c1, col_c2 = st.columns(2)
-                        with col_c1:
-                            st.markdown("#### Average Endline Score Trajectory (YoY)")
-                            centre_avg = (
-                                df_centre_deep
-                                .groupby(['Academic Year', 'Subject'], observed=True)['Obtained Marks']
-                                .mean().reset_index()
-                            )
-                            fig_c_avg = px.line(
-                                centre_avg, x="Academic Year", y="Obtained Marks", color="Subject",
-                                markers=True, line_shape="linear", text="Obtained Marks",
-                            )
-                            fig_c_avg.update_traces(
-                                textposition="top center", texttemplate='%{text:.1f}', marker=dict(size=10)
-                            )
-                            fig_c_avg.update_layout(
-                                xaxis_title="", yaxis_title="Average Endline Score",
-                                plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                            )
-                            fig_c_avg.update_xaxes(showgrid=False, linecolor='black')
-                            fig_c_avg.update_yaxes(showgrid=True, gridcolor='lightgrey', zeroline=False)
-                            st.plotly_chart(fig_c_avg, width='stretch')
-
-                        with col_c2:
-                            st.markdown("#### R.I.S.E Distribution by Academic Year")
-                            if 'Category' in df_centre_deep.columns:
-                                centre_cat = (
-                                    df_centre_deep
-                                    .groupby(['Academic Year', 'Category'], observed=True)
-                                    .size().reset_index(name='Count')
-                                )
-                                centre_cat['Percentage'] = (
-                                    centre_cat.groupby('Academic Year')['Count']
-                                    .transform(lambda x: x / x.sum() * 100)
-                                )
-                                fig_c_rise = px.bar(
-                                    centre_cat, x="Academic Year", y="Percentage", color="Category",
-                                    color_discrete_map=RISE_COLORS_LONG,
-                                    text=centre_cat['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                                    category_orders={
-                                        "Category": ["Reviving", "Initiating", "Shaping", "Evolving"],
-                                        "Academic Year": AY_ORDER,
-                                    },
-                                )
-                                fig_c_rise.update_layout(
-                                    barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
-                                    legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                                )
-                                st.plotly_chart(fig_c_rise, width='stretch')
-
-                        st.markdown("---")
-                        st.markdown("#### Centre vs All-Centre Benchmark (Endlines Only, YoY)")
-                        el24_centre = df_centre_deep[df_centre_deep['Academic Year'] == 'AY24-25']['Obtained Marks'].mean()
-                        el25_centre = df_centre_deep[df_centre_deep['Academic Year'] == 'AY25-26']['Obtained Marks'].mean()
-                        el24_all    = df_cdd[df_cdd['Academic Year'] == 'AY24-25']['Obtained Marks'].mean()
-                        el25_all    = df_cdd[df_cdd['Academic Year'] == 'AY25-26']['Obtained Marks'].mean()
-                        bench_data  = pd.DataFrame({
-                            'Group':        [selected_centre_deep, 'All Centres', selected_centre_deep, 'All Centres'],
-                            'Academic Year': ['AY24-25', 'AY24-25', 'AY25-26', 'AY25-26'],
-                            'Avg Score':    [el24_centre, el24_all, el25_centre, el25_all],
-                        }).dropna(subset=['Avg Score'])
-                        if not bench_data.empty:
-                            bench_data['Academic Year'] = pd.Categorical(
-                                bench_data['Academic Year'], categories=AY_ORDER, ordered=True
-                            )
-                            fig_bench = px.bar(
-                                bench_data, x="Academic Year", y="Avg Score", color="Group",
-                                barmode='group',
-                                text=bench_data['Avg Score'].apply(lambda x: f'{x:.2f}'),
-                            )
-                            fig_bench.update_layout(
-                                xaxis_title="", yaxis_title="Average Endline Score",
-                                margin=dict(l=0, r=0, t=30),
-                                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                            )
-                            st.plotly_chart(fig_bench, width='stretch')
-
-                        st.markdown("---")
-                        st.markdown("#### Gender Breakdown at This Centre (Endline YoY)")
-                        if 'Gender' in df_centre_deep.columns:
-                            gen_centre = df_centre_deep[
-                                ~df_centre_deep['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])
-                            ]
-                            if not gen_centre.empty:
-                                gen_avg_c = (
-                                    gen_centre
-                                    .groupby(['Academic Year', 'Gender'], observed=True)['Obtained Marks']
-                                    .mean().reset_index()
-                                )
-                                gen_avg_c['Academic Year'] = pd.Categorical(
-                                    gen_avg_c['Academic Year'], categories=AY_ORDER, ordered=True
-                                )
-                                fig_gen_c = px.line(
-                                    gen_avg_c, x="Academic Year", y="Obtained Marks", color="Gender",
-                                    markers=True, line_shape="linear",
-                                    color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"},
-                                )
-                                fig_gen_c.update_traces(marker=dict(size=10))
-                                fig_gen_c.update_layout(
-                                    xaxis_title="", yaxis_title="Average Endline Score",
-                                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                                )
-                                st.plotly_chart(fig_gen_c, width='stretch')
-                            else:
-                                st.info("No valid gender data for this centre.")
-                    else:
-                        st.warning("No Endline data found for this centre with the current filters.")
-                else:
-                    st.warning("Centre Name data not available.")
-    else:
-        st.error(
-            f"⚠️ **Longitudinal Data Error!** Could not load data from the provided files. "
-            f"Please check that `{FILE_24}` and `{FILE_25}` are valid Excel workbooks."
+    # ─────────────────────────────────────────────────────────────
+    # TAB 3: GENDER EQUITY (retained cohort, AY25-26 has gender)
+    # ─────────────────────────────────────────────────────────────
+    with gen_tab:
+        st.markdown("### 🚻 Gender Equity — AY 25-26 Endline (Retained Cohort)")
+        st.caption(
+            "Gender data was not collected in AY 24-25. "
+            "This tab shows the gender split for the retained cohort in their AY 25-26 Endline."
         )
+        if no_overlap:
+            st.warning("⚠️ No overlapping Student IDs.")
+        else:
+            g25_valid = df_ret_25[df_ret_25["Gender"].isin(["Boy", "Girl"])]
+            if g25_valid.empty:
+                st.info("No valid gender data in the retained cohort for AY 25-26.")
+            else:
+                col_g1, col_g2 = st.columns([1.5, 1])
+                g25_avg = g25_valid.groupby("Gender")["Obtained Marks"].mean().reset_index()
+                with col_g1:
+                    fig_gen = px.bar(
+                        g25_avg, x="Gender", y="Obtained Marks", color="Gender",
+                        color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"},
+                        text=g25_avg["Obtained Marks"].apply(lambda x: f"{x:.2f}"),
+                    )
+                    fig_gen.update_layout(
+                        xaxis_title="", yaxis_title="Avg Score (AY 25-26 Endline)",
+                        plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30), showlegend=False,
+                    )
+                    st.plotly_chart(fig_gen, use_container_width=True)
+                with col_g2:
+                    try:
+                        g_b = g25_avg[g25_avg["Gender"] == "Boy"]["Obtained Marks"].values[0]
+                        g_g = g25_avg[g25_avg["Gender"] == "Girl"]["Obtained Marks"].values[0]
+                        gap = abs(g_g - g_b)
+                        leader = "Girls" if g_g > g_b else "Boys"
+                        st.success(
+                            f"**🔍 Gap (AY 25-26 Endline):** {gap:.2f} pts. "
+                            f"**{leader}** outperform on average."
+                        )
+                        st.markdown(
+                            "**💡** The gap is within normal range. Monitor across future years."
+                            if gap < 0.5 else
+                            "**💡** A meaningful gap exists. Consider gender-specific engagement strategies."
+                        )
+                    except Exception:
+                        st.write("Insufficient gender data.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 4: SUBJECT WISE YoY (all students, Endline only)
+    # ─────────────────────────────────────────────────────────────
+    with subj_tab:
+        st.markdown("### 📚 Subject-Wise YoY Comparison (All Students, Endline Only)")
+        df_sv = df_endlines.copy()
+        all_subjects_sv = sorted(df_sv["Subject"].dropna().unique())
+        sel_subj = st.selectbox("Filter by Subject", ["All"] + list(all_subjects_sv), key="subj_sel_long")
+        if sel_subj != "All":
+            df_sv = df_sv[df_sv["Subject"] == sel_subj]
+
+        col_sw1, col_sw2 = st.columns(2)
+        with col_sw1:
+            st.markdown("#### Average Endline Score (YoY)")
+            subj_avg = (
+                df_sv.groupby(["Academic Year", "Subject"], observed=True)["Obtained Marks"]
+                .mean().reset_index().sort_values("Academic Year")
+            )
+            fig_sw = px.line(subj_avg, x="Academic Year", y="Obtained Marks", color="Subject",
+                             markers=True, text="Obtained Marks")
+            fig_sw.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10))
+            fig_sw.update_layout(
+                xaxis_title="", yaxis_title="Avg Endline Score",
+                plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+            )
+            fig_sw.update_xaxes(showgrid=False, linecolor="black")
+            fig_sw.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
+            st.plotly_chart(fig_sw, use_container_width=True)
+
+        with col_sw2:
+            st.markdown("#### R.I.S.E Category by Subject")
+            if "Category" in df_sv.columns:
+                ay_opts = [ay for ay in AY_ORDER if ay in df_sv["Academic Year"].values]
+                sel_ay = st.selectbox("Academic Year", ay_opts, index=len(ay_opts)-1, key="ay_subj_long")
+                df_sv_ay = df_sv[df_sv["Academic Year"] == sel_ay]
+                sc = df_sv_ay.groupby(["Subject", "Category"], observed=True).size().reset_index(name="Count")
+                sc["Pct"] = sc.groupby("Subject")["Count"].transform(lambda x: x / x.sum() * 100)
+                fig_sc = px.bar(sc, x="Subject", y="Pct", color="Category",
+                                color_discrete_map=RISE_COLORS,
+                                text=sc["Pct"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
+                                category_orders={"Category": RISE_ORDER})
+                fig_sc.update_layout(
+                    barmode="stack", yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
+                    legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
+                )
+                st.plotly_chart(fig_sc, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("#### Subject-Wise YoY Score Change (AY24-25 → AY25-26 Endline)")
+        el24s = df_endlines[df_endlines["Academic Year"] == "AY24-25"].groupby("Subject")["Obtained Marks"].mean()
+        el25s = df_endlines[df_endlines["Academic Year"] == "AY25-26"].groupby("Subject")["Obtained Marks"].mean()
+        yoy_s = (el25s - el24s).dropna().reset_index()
+        yoy_s.columns = ["Subject", "YoY Change"]
+        yoy_s["Color"] = yoy_s["YoY Change"].apply(lambda x: "Improved" if x >= 0 else "Declined")
+        if not yoy_s.empty:
+            fig_yoys = px.bar(yoy_s, x="Subject", y="YoY Change", color="Color",
+                              color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
+                              text=yoy_s["YoY Change"].apply(lambda x: f"{x:+.2f}"))
+            fig_yoys.add_hline(y=0, line_dash="dash", line_color="black")
+            fig_yoys.update_layout(
+                showlegend=False, margin=dict(l=0, r=0, t=30),
+                plot_bgcolor="rgba(0,0,0,0)", xaxis_title="", yaxis_title="YoY Endline Score Change",
+            )
+            st.plotly_chart(fig_yoys, use_container_width=True)
+        else:
+            st.info("Both years' endline data needed for YoY subject comparison.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 5: GEOGRAPHICAL YoY (all students, Endline only)
+    # ─────────────────────────────────────────────────────────────
+    with geo_tab:
+        st.markdown("### 🗺️ Geographical YoY Comparison (Endline Only)")
+        df_geo = df_endlines.copy()
+        col_g1, col_g2 = st.columns(2)
+
+        with col_g1:
+            st.markdown("#### State-wise Avg Endline Score (YoY)")
+            state_avg = df_geo.groupby(["State", "Academic Year"], observed=True)["Obtained Marks"].mean().reset_index()
+            fig_sa = px.line(state_avg, x="Academic Year", y="Obtained Marks", color="State",
+                             markers=True, text="Obtained Marks")
+            fig_sa.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=9))
+            fig_sa.update_layout(
+                xaxis_title="", yaxis_title="Avg Endline Score",
+                plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+            )
+            fig_sa.update_xaxes(showgrid=False, linecolor="black")
+            fig_sa.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
+            st.plotly_chart(fig_sa, use_container_width=True)
+
+        with col_g2:
+            st.markdown("#### State-wise R.I.S.E Shift")
+            ay_opts_geo = [ay for ay in AY_ORDER if ay in df_geo["Academic Year"].values]
+            sel_ay_geo = st.selectbox("Academic Year", ay_opts_geo, index=len(ay_opts_geo)-1, key="ay_geo_long")
+            sg = df_geo[df_geo["Academic Year"] == sel_ay_geo].groupby(
+                ["State", "Category"]
+            ).size().reset_index(name="Count")
+            sg["Pct"] = sg.groupby("State")["Count"].transform(lambda x: x / x.sum() * 100)
+            fig_sg = px.bar(sg, x="State", y="Pct", color="Category",
+                            color_discrete_map=RISE_COLORS,
+                            text=sg["Pct"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
+                            category_orders={"Category": RISE_ORDER})
+            fig_sg.update_layout(
+                barmode="stack", yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
+                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
+            )
+            st.plotly_chart(fig_sg, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("#### State-wise YoY Score Change")
+        el24_st = df_geo[df_geo["Academic Year"] == "AY24-25"].groupby("State")["Obtained Marks"].mean()
+        el25_st = df_geo[df_geo["Academic Year"] == "AY25-26"].groupby("State")["Obtained Marks"].mean()
+        if not el24_st.empty and not el25_st.empty:
+            yoy_st = (el25_st - el24_st).dropna().reset_index()
+            yoy_st.columns = ["State", "YoY Change"]
+            yoy_st["Color"] = yoy_st["YoY Change"].apply(lambda x: "Improved" if x >= 0 else "Declined")
+            fig_yst = px.bar(yoy_st, x="State", y="YoY Change", color="Color",
+                             color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
+                             text=yoy_st["YoY Change"].apply(lambda x: f"{x:+.2f}"))
+            fig_yst.add_hline(y=0, line_dash="dash", line_color="black")
+            fig_yst.update_layout(
+                showlegend=False, margin=dict(l=0, r=0, t=30),
+                plot_bgcolor="rgba(0,0,0,0)", xaxis_title="", yaxis_title="YoY Score Change",
+            )
+            st.plotly_chart(fig_yst, use_container_width=True)
+        else:
+            st.info("Both years' endline data needed for state YoY comparison.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 6: CENTRE DEEP DIVE (Endline only)
+    # ─────────────────────────────────────────────────────────────
+    with centre_tab:
+        st.markdown("### 🏫 Centre Deep Dive — YoY (Endline Only)")
+        df_cdd = df_endlines.copy()
+        all_centres = sorted(df_cdd["Centre Name"].dropna().unique())
+        sel_ctr = st.selectbox("Select Centre", all_centres, key="centre_deep_long")
+        df_c = df_cdd[df_cdd["Centre Name"] == sel_ctr]
+
+        if df_c.empty:
+            st.warning("No endline data for this centre with the current filters.")
+        else:
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                st.markdown("#### Avg Endline Score Trajectory")
+                c_avg = df_c.groupby(["Academic Year", "Subject"], observed=True)["Obtained Marks"].mean().reset_index()
+                fig_ca = px.line(c_avg, x="Academic Year", y="Obtained Marks", color="Subject",
+                                 markers=True, text="Obtained Marks")
+                fig_ca.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10))
+                fig_ca.update_layout(
+                    xaxis_title="", yaxis_title="Avg Endline Score",
+                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                )
+                fig_ca.update_xaxes(showgrid=False, linecolor="black")
+                fig_ca.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
+                st.plotly_chart(fig_ca, use_container_width=True)
+
+            with col_c2:
+                st.markdown("#### R.I.S.E Distribution by Year")
+                cc = df_c.groupby(["Academic Year", "Category"], observed=True).size().reset_index(name="Count")
+                cc["Pct"] = cc.groupby("Academic Year")["Count"].transform(lambda x: x / x.sum() * 100)
+                fig_cc = px.bar(cc, x="Academic Year", y="Pct", color="Category",
+                                color_discrete_map=RISE_COLORS,
+                                text=cc["Pct"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
+                                category_orders={"Category": RISE_ORDER, "Academic Year": AY_ORDER})
+                fig_cc.update_layout(
+                    barmode="stack", yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
+                    legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
+                )
+                st.plotly_chart(fig_cc, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown("#### Centre vs All Centres Benchmark")
+            e24c = df_c[df_c["Academic Year"] == "AY24-25"]["Obtained Marks"].mean()
+            e25c = df_c[df_c["Academic Year"] == "AY25-26"]["Obtained Marks"].mean()
+            e24a = df_cdd[df_cdd["Academic Year"] == "AY24-25"]["Obtained Marks"].mean()
+            e25a = df_cdd[df_cdd["Academic Year"] == "AY25-26"]["Obtained Marks"].mean()
+            bench = pd.DataFrame({
+                "Group":        [sel_ctr, "All Centres", sel_ctr, "All Centres"],
+                "Academic Year": ["AY24-25", "AY24-25", "AY25-26", "AY25-26"],
+                "Avg Score":    [e24c, e24a, e25c, e25a],
+            }).dropna(subset=["Avg Score"])
+            bench["Academic Year"] = pd.Categorical(bench["Academic Year"], categories=AY_ORDER, ordered=True)
+            if not bench.empty:
+                fig_bench = px.bar(bench, x="Academic Year", y="Avg Score", color="Group",
+                                   barmode="group",
+                                   text=bench["Avg Score"].apply(lambda x: f"{x:.2f}"))
+                fig_bench.update_layout(
+                    xaxis_title="", yaxis_title="Avg Endline Score", margin=dict(l=0, r=0, t=30),
+                    legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
+                )
+                st.plotly_chart(fig_bench, use_container_width=True)
+
+            # Gender split at this centre (AY25-26 only)
+            st.markdown("---")
+            st.markdown("#### Gender Breakdown (AY 25-26 Endline)")
+            gen_c = df_c[(df_c["Academic Year"] == "AY25-26") & df_c["Gender"].isin(["Boy", "Girl"])]
+            if not gen_c.empty:
+                gen_avg_c = gen_c.groupby(["Gender"], observed=True)["Obtained Marks"].mean().reset_index()
+                fig_gen_c = px.bar(gen_avg_c, x="Gender", y="Obtained Marks", color="Gender",
+                                   color_discrete_map={"Boy": "#636EFA", "Girl": "#EF553B"},
+                                   text=gen_avg_c["Obtained Marks"].apply(lambda x: f"{x:.2f}"))
+                fig_gen_c.update_layout(
+                    xaxis_title="", yaxis_title="Avg Score",
+                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30), showlegend=False,
+                )
+                st.plotly_chart(fig_gen_c, use_container_width=True)
+            else:
+                st.info("No gender data for this centre in AY 25-26.")
+
+    # ─────────────────────────────────────────────────────────────
+    # TAB 7: STUDENT LOOKUP
+    # Search by Student ID across ALL data (not just filtered subset)
+    # to ensure a valid ID is never invisible due to sidebar narrowing.
+    # ─────────────────────────────────────────────────────────────
+    with student_tab:
+        st.markdown("### 🔍 Student Lookup — Individual YoY Profile")
+        st.markdown(
+            "Enter a **Student ID** to view a full Year-over-Year breakdown across all "
+            "assessments (Baseline & Endline for AY 24-25 and AY 25-26)."
+        )
+        st.caption(
+            "ℹ️ Search runs against the **full dataset** (ignoring sidebar filters) "
+            "so a student is never hidden by an active filter."
+        )
+
+        # ── Search controls ───────────────────────────────────────
+        s_col, b_col = st.columns([3, 1])
+        with s_col:
+            raw_input = st.text_input(
+                "Student ID", placeholder="e.g. 428115", key="student_search_input"
+            ).strip()
+        with b_col:
+            st.write("")
+            st.button("🔍 Search", use_container_width=True, key="student_search_btn")
+
+        # Convenience picker from the currently filtered set
+        with st.expander("Or pick a student from the current filtered view", expanded=False):
+            ids_in_filter = [""] + sorted(filtered_df_long["Student ID"].dropna().unique())
+            picked = st.selectbox("Student IDs in current filter", ids_in_filter, key="student_pick_dd")
+            if picked:
+                raw_input = picked
+
+        search_input = raw_input.strip()
+
+        if not search_input:
+            st.info("👆 Enter a Student ID above to view their full profile.")
+            st.stop()
+
+        # ── Lookup ────────────────────────────────────────────────
+        mask       = df_long["Student ID"].astype(str).str.startswith(search_input)
+        candidates = df_long[mask]["Student ID"].dropna().unique()
+
+        if len(candidates) == 0:
+            st.error(f"❌ No records found for ID starting with **{search_input}**.")
+            st.stop()
+
+        # If partial match returns multiple, let user pick the exact one
+        if len(candidates) > 1 and search_input not in candidates:
+            exact_id = st.selectbox("Multiple matches — select exact ID:", sorted(candidates), key="exact_id_pick")
+        else:
+            exact_id = search_input if search_input in candidates else candidates[0]
+
+        student_df = df_long[df_long["Student ID"] == exact_id].copy()
+
+        if student_df.empty:
+            st.error("No data found for this Student ID.")
+            st.stop()
+
+        # ── Profile header card ───────────────────────────────────
+        st.markdown("---")
+        meta = student_df.sort_values("Timepoint").iloc[0]
+        grade_by_year = student_df.groupby("Academic Year")["Grade"].first().to_dict()
+        gender_val = student_df[student_df["Gender"] != "Unknown"]["Gender"].mode()
+        gender_display = gender_val.iloc[0] if not gender_val.empty else "Not recorded"
+
+        st.markdown(
+            f"""
+            <div class="student-card">
+                <h3 style="margin:0;color:#0094c9;">🎓 Student ID: {exact_id}</h3>
+                <p style="margin:6px 0 0 0;color:#444;line-height:1.8;">
+                    🏫 <b>Centre:</b> {meta.get('Centre Name','—')} &nbsp;|&nbsp;
+                    🌍 <b>State:</b>  {meta.get('State','—')} &nbsp;|&nbsp;
+                    🤝 <b>Donor:</b>  {meta.get('Donor','—')} &nbsp;|&nbsp;
+                    🚻 <b>Gender:</b> {gender_display}<br>
+                    📚 <b>Grade AY24-25:</b> {grade_by_year.get('AY24-25','—')} &nbsp;|&nbsp;
+                    📚 <b>Grade AY25-26:</b> {grade_by_year.get('AY25-26','—')}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        # ── KPI row ───────────────────────────────────────────────
+        el24_s = student_df[(student_df["Academic Year"] == "AY24-25") & (student_df["Period"] == "Endline")]
+        el25_s = student_df[(student_df["Academic Year"] == "AY25-26") & (student_df["Period"] == "Endline")]
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Timepoints recorded", student_df["Timepoint"].nunique(),
+                  help="Max possible = 4 (BL + EL × 2 years)")
+        k2.metric("Subjects (AY24-25 EL)", len(el24_s))
+        k3.metric("Subjects (AY25-26 EL)", len(el25_s))
+
+        shared_subs = set(el24_s["Subject"]) & set(el25_s["Subject"]) if not (el24_s.empty or el25_s.empty) else set()
+        if shared_subs:
+            avg24_k = el24_s[el24_s["Subject"].isin(shared_subs)]["Obtained Marks"].mean()
+            avg25_k = el25_s[el25_s["Subject"].isin(shared_subs)]["Obtained Marks"].mean()
+            k4.metric("Avg Score Change (shared subjects)", f"{avg25_k:.1f}",
+                      delta=f"{avg25_k - avg24_k:+.1f}")
+        else:
+            k4.metric("YoY Status", "No shared subjects across both years")
+
+        # ── Full assessment record table ──────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📋 Full Assessment Record")
+        tbl = student_df[["Timepoint","Subject","Grade","Obtained Marks","Total Marks","Pct Score","Category"]].copy()
+        tbl = tbl.sort_values(["Timepoint","Subject"])
+
+        def highlight_cat(val):
+            return {
+                "Reviving":   "background-color:#f27c48;color:white",
+                "Initiating": "background-color:#0094c9;color:white",
+                "Shaping":    "background-color:#00964d;color:white",
+                "Evolving":   "background-color:#ed1c2d;color:white",
+            }.get(val, "")
+
+        st.dataframe(
+            tbl.style.applymap(highlight_cat, subset=["Category"]),
+            use_container_width=True, hide_index=True,
+        )
+
+        # ── Per-subject score chart across all 4 timepoints ───────
+        st.markdown("---")
+        st.markdown("#### 📊 Score Journey by Subject")
+
+        TP_ORDER = ["AY24-25 Baseline", "AY24-25 Endline", "AY25-26 Baseline", "AY25-26 Endline"]
+        TP_COLORS = {
+            "AY24-25 Baseline": "#a0aec0",
+            "AY24-25 Endline":  "#636EFA",
+            "AY25-26 Baseline": "#fbb6a0",
+            "AY25-26 Endline":  "#00CC96",
+        }
+        student_df["Timepoint"] = pd.Categorical(student_df["Timepoint"], categories=TP_ORDER, ordered=True)
+        subjects_found = sorted(student_df["Subject"].dropna().unique())
+
+        if len(subjects_found) == 0:
+            st.info("No subject data found for this student.")
+        else:
+            for subj in subjects_found:
+                sub_data = student_df[student_df["Subject"] == subj].sort_values("Timepoint")
+                if sub_data.empty:
+                    continue
+                total_marks = sub_data["Total Marks"].max()
+                fig_stu = go.Figure()
+                for _, row in sub_data.iterrows():
+                    tp = str(row["Timepoint"])
+                    fig_stu.add_trace(go.Bar(
+                        x=[tp], y=[row["Obtained Marks"]],
+                        name=tp,
+                        marker_color=TP_COLORS.get(tp, "#cccccc"),
+                        text=f"<b>{row['Obtained Marks']:.0f}</b>/{total_marks:.0f}<br><i>{row['Category']}</i>",
+                        textposition="outside",
+                        showlegend=False,
+                    ))
+                fig_stu.add_hline(
+                    y=total_marks, line_dash="dot", line_color="#888",
+                    annotation_text=f"Max: {total_marks:.0f}", annotation_position="top right",
+                )
+                fig_stu.update_layout(
+                    title=dict(text=f"<b>{subj}</b>", font=dict(size=15)),
+                    yaxis=dict(range=[0, total_marks * 1.3], title="Marks",
+                               showgrid=True, gridcolor="lightgrey"),
+                    xaxis_title="",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    margin=dict(l=0, r=0, t=50, b=10),
+                    height=300,
+                )
+                st.plotly_chart(fig_stu, use_container_width=True)
+
+            # ── Category journey timeline (all subjects on one chart) ─
+            st.markdown("---")
+            st.markdown("#### 🔄 R.I.S.E Tier Journey (All Subjects)")
+            mig = student_df.groupby(["Timepoint", "Subject"], observed=True)["Category"].first().reset_index()
+            mig = mig.sort_values("Timepoint")
+            cat_num = {"Reviving": 1, "Initiating": 2, "Shaping": 3, "Evolving": 4}
+            mig["Tier"] = mig["Category"].map(cat_num)
+
+            fig_mig = px.line(
+                mig, x="Timepoint", y="Tier", color="Subject",
+                markers=True, line_shape="linear",
+                labels={"Tier": "Performance Tier", "Timepoint": ""},
+                hover_data={"Category": True, "Tier": False},
+            )
+            fig_mig.update_traces(marker=dict(size=13), line=dict(width=2))
+            fig_mig.update_layout(
+                yaxis=dict(
+                    tickvals=[1, 2, 3, 4],
+                    ticktext=["🔴 Reviving", "🔵 Initiating", "🟢 Shaping", "🔴 Evolving"],
+                    range=[0.5, 4.5], showgrid=True, gridcolor="#eee",
+                ),
+                plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                xaxis=dict(showgrid=False, linecolor="black"),
+                height=320,
+            )
+            # Subtle horizontal band fills per tier
+            for lvl, clr in [
+                (1, "rgba(242,124,72,0.07)"),
+                (2, "rgba(0,148,201,0.07)"),
+                (3, "rgba(0,150,77,0.07)"),
+                (4, "rgba(237,28,45,0.07)"),
+            ]:
+                fig_mig.add_hrect(y0=lvl-0.45, y1=lvl+0.45, fillcolor=clr, line_width=0)
+            st.plotly_chart(fig_mig, use_container_width=True)
+
+            # Insight callout
+            if not el24_s.empty and not el25_s.empty and shared_subs:
+                improved = []
+                declined = []
+                for sub in shared_subs:
+                    sc24 = el24_s[el24_s["Subject"] == sub]["Obtained Marks"].mean()
+                    sc25 = el25_s[el25_s["Subject"] == sub]["Obtained Marks"].mean()
+                    (improved if sc25 >= sc24 else declined).append(
+                        f"{sub} ({sc25 - sc24:+.1f})"
+                    )
+                if improved:
+                    st.success(f"📈 **Improved (Endline YoY):** {', '.join(improved)}")
+                if declined:
+                    st.error(f"📉 **Declined (Endline YoY):** {', '.join(declined)}")
 
     st.stop()
 
 
 # ==========================================
-# MAIN DASHBOARD
+# MAIN DASHBOARD  (AY 25-26 BL vs EL)
 # ==========================================
+DATA_FILE = "BL-EL-AY-25-26-Final-AllSubjects.xlsx"
+
 st.title("📈 Impact Analytics Dashboard")
 st.markdown(
     "<p style='color:gray;font-size:1.1em;'>Comprehensive Baseline vs. Endline Performance Assessment</p>",
@@ -975,786 +1014,467 @@ with st.sidebar:
     try:
         st.image("evidyaloka_logo.png", width=273)
     except Exception:
-        st.warning("⚠️ Logo not found.")
-    st.success(f"👤 **Logged in as:** {st.session_state['user_first_name']}")
-    nav_col1, nav_col2 = st.columns(2)
-    with nav_col1:
+        pass
+    st.success(f"👤 **{st.session_state['user_first_name']}**")
+    nc1, nc2 = st.columns(2)
+    with nc1:
         if st.button("🏠 Home", use_container_width=True, key="nav_home_main"):
-            st.session_state["current_page"] = "home"
-            st.rerun()
-    with nav_col2:
+            st.session_state["current_page"] = "home"; st.rerun()
+    with nc2:
         if st.button("Sign Out", use_container_width=True, key="signout_main"):
-            for k in ["logged_in_email", "user_first_name"]:
-                st.session_state[k] = None if k == "logged_in_email" else "User"
-            st.session_state["current_page"] = "home"
+            st.session_state.update({"logged_in_email": None, "user_first_name": "User", "current_page": "home"})
             st.rerun()
     st.markdown("---")
 
 
-# ==========================================
-# DATA LOADING ENGINE
-# ==========================================
-@st.cache_data
+@st.cache_data(show_spinner=False)
 def load_and_prep_data(file_source):
     common_cols = [
-        'State', 'Centre Name', 'Donor', 'Subject', 'Grade',
-        'Student ID', 'Gender', 'Total Marks', 'Obtained Marks', 'Category', 'Academic Year',
+        "State", "Centre Name", "Donor", "Subject", "Grade", "Student ID",
+        "Gender", "Total Marks", "Obtained Marks", "Category", "Academic Year",
     ]
-    dfs_to_concat = []
+    dfs = []
     try:
-        xls         = pd.ExcelFile(file_source)
-        sheet_names = xls.sheet_names
-        base_sheet  = 'Baseline' if 'Baseline' in sheet_names else 0
-        end_sheet   = 'Endline'  if 'Endline'  in sheet_names else (1 if len(sheet_names) > 1 else 0)
-
-        df_base = pd.read_excel(file_source, sheet_name=base_sheet)
-        if 'Rubrics' in df_base.columns:
-            df_base.rename(columns={'Rubrics': 'Category'}, inplace=True)
-        df_base['Academic Year'] = 'Baseline'
-        dfs_to_concat.append(df_base[[c for c in common_cols if c in df_base.columns]])
-
-        df_end = pd.read_excel(file_source, sheet_name=end_sheet)
-        if 'Rubrics' in df_end.columns:
-            df_end.rename(columns={'Rubrics': 'Category'}, inplace=True)
-        df_end['Academic Year'] = 'Endline'
-        dfs_to_concat.append(df_end[[c for c in common_cols if c in df_end.columns]])
+        xls = pd.ExcelFile(file_source)
+        sheets = xls.sheet_names
+        base_sheet = "Baseline" if "Baseline" in sheets else 0
+        end_sheet  = "Endline"  if "Endline"  in sheets else (1 if len(sheets) > 1 else 0)
+        for sheet, label in [(base_sheet, "Baseline"), (end_sheet, "Endline")]:
+            df_s = pd.read_excel(file_source, sheet_name=sheet)
+            if "Rubrics" in df_s.columns:
+                df_s.rename(columns={"Rubrics": "Category"}, inplace=True)
+            df_s["Academic Year"] = label
+            dfs.append(df_s[[c for c in common_cols if c in df_s.columns]])
     except Exception as e:
-        st.error(f"Error reading the Excel file: {e}")
+        st.error(f"Error reading Excel file: {e}")
         return pd.DataFrame()
-
-    if not dfs_to_concat:
+    if not dfs:
         return pd.DataFrame()
-
-    df_combined = pd.concat(dfs_to_concat, ignore_index=True)
-    for col in ['State', 'Centre Name', 'Donor', 'Subject', 'Student ID', 'Gender', 'Category']:
-        if col in df_combined.columns:
-            df_combined[col] = df_combined[col].astype(str).str.strip()
-    if 'Gender' in df_combined.columns:
-        df_combined['Gender'] = df_combined['Gender'].astype(str).str.strip().str.title()
-    if 'Grade' in df_combined.columns:
-        df_combined['Grade'] = df_combined['Grade'].astype(str).str.replace(r'\.0$', '', regex=True)
-    if 'Category' in df_combined.columns:
-        rise_order = ["Reviving", "Initiating", "Shaping", "Evolving"]
-        df_combined['Category'] = pd.Categorical(df_combined['Category'], categories=rise_order, ordered=True)
-    df_combined['Obtained Marks'] = pd.to_numeric(df_combined['Obtained Marks'], errors='coerce')
-    return df_combined
+    df = pd.concat(dfs, ignore_index=True)
+    for col in ["State", "Centre Name", "Donor", "Subject", "Student ID", "Gender", "Category"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+    if "Gender" in df.columns:
+        df["Gender"] = df["Gender"].str.title().str.strip()
+    if "Grade" in df.columns:
+        df["Grade"] = df["Grade"].astype(str).str.replace(r"\.0$", "", regex=True)
+    if "Category" in df.columns:
+        df["Category"] = pd.Categorical(df["Category"], categories=RISE_ORDER, ordered=True)
+    df["Obtained Marks"] = pd.to_numeric(df["Obtained Marks"], errors="coerce")
+    return df
 
 
-DATA_FILE = "BL-EL-AY-25-26-Final-AllSubjects.xlsx"
-
-# FIX 2 — file uploader fallback for main dashboard
 data_source = None
 if os.path.exists(DATA_FILE):
     data_source = DATA_FILE
 else:
-    st.warning(
-        f"⚠️ `{DATA_FILE}` was not found on disk. Upload it below to load the dashboard."
-    )
-    uploaded_main = st.file_uploader(
-        f"Upload AY 25-26 data ({DATA_FILE})", type=["xlsx"], key="up_main"
-    )
-    if uploaded_main is not None:
-        data_source = uploaded_main
+    st.warning(f"`{DATA_FILE}` not found. Upload it below.")
+    up_main = st.file_uploader(f"Upload {DATA_FILE}", type=["xlsx"], key="up_main")
+    if up_main:
+        data_source = up_main
 
-if data_source is not None:
-    with st.spinner('Loading and crunching numbers...'):
-        df = load_and_prep_data(data_source)
+if data_source is None:
+    st.info("Please upload the data file to load the dashboard.")
+    st.stop()
 
-    if not df.empty:
-        with st.sidebar:
-            filtered_df, main_sel = build_filter_sidebar(df, key_prefix="main")
-        selected_donors = main_sel["donor"]
+with st.spinner("Loading data…"):
+    df = load_and_prep_data(data_source)
 
-        if filtered_df.empty:
-            st.warning("⚠️ No data available for the selected filters. Please adjust your criteria.")
-        else:
-            tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-                "📊 Executive Summary",
-                "📚 Subject Deep-Dive",
-                "🗺️ Geographic View",
-                "🧑‍🎓 Student-Level Impact",
-                "🚻 Gender Analysis",
-                "📉 RTM Analysis",
-            ])
+if df.empty:
+    st.error("Data loaded but is empty.")
+    st.stop()
 
-            base_df = filtered_df[filtered_df['Academic Year'] == 'Baseline']
-            end_df  = filtered_df[filtered_df['Academic Year'] == 'Endline']
+with st.sidebar:
+    filtered_df, main_sel = build_filter_sidebar(df, key_prefix="main")
+    selected_donors = main_sel["donor"]
 
-            # ------------------------------------------
-            # TAB 1: EXECUTIVE SUMMARY
-            # ------------------------------------------
-            with tab1:
-                st.markdown("### 🚀 High-Level Metrics")
-                kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-                if not base_df.empty and not end_df.empty and 'Student ID' in df.columns:
-                    matched_students = len(
-                        pd.merge(
-                            base_df[['Student ID', 'Subject']].dropna(),
-                            end_df[['Student ID', 'Subject']].dropna(),
-                            on=['Student ID', 'Subject'],
-                        )
-                    )
-                else:
-                    matched_students = 0
+if filtered_df.empty:
+    st.warning("⚠️ No data for selected filters.")
+    st.stop()
 
-                avg_base = base_df['Obtained Marks'].mean() if not base_df.empty else None
-                avg_end  = end_df['Obtained Marks'].mean()  if not end_df.empty  else None
-                sd_base  = base_df['Obtained Marks'].std()  if not base_df.empty and len(base_df) > 1 else None
-                sd_end   = end_df['Obtained Marks'].std()   if not end_df.empty  and len(end_df) > 1  else None
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Executive Summary", "📚 Subject Deep-Dive",
+    "🗺️ Geographic View",  "🧑‍🎓 Student-Level Impact",
+    "🚻 Gender Analysis",   "📉 RTM Analysis",
+])
 
-                kpi1.metric("Matched Students", f"{matched_students:,}")
-                if avg_base is not None and avg_end is not None:
-                    kpi2.metric("Baseline Mean Score", f"{avg_base:.2f}")
-                    kpi3.metric("Endline Mean Score",  f"{avg_end:.2f}",  delta=f"{avg_end - avg_base:.2f}")
-                    if sd_base is not None and sd_end is not None:
-                        kpi4.metric("Endline Score SD", f"{sd_end:.2f}", delta=f"{sd_end - sd_base:.2f}", delta_color="inverse")
-                    else:
-                        kpi4.metric("Endline Score SD", "N/A")
-                    base_evolve = len(base_df[base_df['Category'] == 'Evolving']) / len(base_df) * 100 if len(base_df) > 0 else 0
-                    end_evolve  = len(end_df[end_df['Category']   == 'Evolving']) / len(end_df)  * 100 if len(end_df)  > 0 else 0
-                    kpi5.metric("Students in 'Evolving'", f"{end_evolve:.1f}%", delta=f"{end_evolve - base_evolve:.1f}%")
-                elif avg_base is not None:
-                    kpi2.metric("Baseline Mean Score", f"{avg_base:.2f}")
-                    kpi3.metric("Endline Mean Score", "N/A")
-                    kpi4.metric("Endline Score SD", "N/A")
-                    kpi5.metric("Data Status", "Awaiting Endline")
-                else:
-                    kpi2.metric("Baseline Mean Score", "N/A")
-                    kpi3.metric("Endline Mean Score", f"{avg_end:.2f}" if avg_end else "N/A")
-                    kpi4.metric("Endline Score SD", f"{sd_end:.2f}" if sd_end else "N/A")
-                    kpi5.metric("Data Status", "Endline Only")
+base_df = filtered_df[filtered_df["Academic Year"] == "Baseline"]
+end_df  = filtered_df[filtered_df["Academic Year"] == "Endline"]
 
-                st.info(
-                    "**💡 Understanding Standard Deviation (SD):** SD measures the spread of student scores. "
-                    "A **decrease** (green delta) in SD means scores are becoming more clustered, indicating "
-                    "the learning gap between high and low performers is closing. An **increase** (red delta) "
-                    "means the gap is widening."
-                )
-                st.markdown("---")
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.markdown("#### 📈 Score Distribution (Box Plot)")
-                    st.caption("Visualizes the spread of scores, median, and outliers.")
-                    fig_box = px.box(
-                        filtered_df, x="Academic Year", y="Obtained Marks",
-                        color="Academic Year", color_discrete_map=COLOR_MAP, points="all",
-                    )
-                    fig_box.update_layout(showlegend=False, margin=dict(l=0, r=0, t=30))
-                    st.plotly_chart(fig_box, width='stretch')
-                with col_b:
-                    st.markdown("#### 🧬 R.I.S.E Category Shift")
-                    st.caption("Proportional breakdown of performance categories.")
-                    cat_counts = filtered_df.groupby(['Academic Year', 'Category']).size().reset_index(name='Count')
-                    cat_counts['Percentage'] = cat_counts.groupby('Academic Year')['Count'].transform(
-                        lambda x: x / x.sum() * 100
-                    )
-                    cat_counts = cat_counts.sort_values(['Academic Year', 'Category'])
-                    fig_rise = px.bar(
-                        cat_counts, x="Category", y="Percentage", color="Academic Year",
-                        text=cat_counts['Percentage'].apply(lambda x: f'{x:.1f}%' if not pd.isna(x) else ''),
-                        color_discrete_map=COLOR_MAP,
-                        category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                    )
-                    fig_rise.update_layout(
-                        barmode='group', margin=dict(l=0, r=0, t=30),
-                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                    )
-                    st.plotly_chart(fig_rise, width='stretch')
+# ── TAB 1: EXECUTIVE SUMMARY ─────────────────────────────────
+with tab1:
+    st.markdown("### 🚀 High-Level Metrics")
+    k1, k2, k3, k4, k5 = st.columns(5)
+    matched = 0
+    if not base_df.empty and not end_df.empty and "Student ID" in df.columns:
+        matched = len(pd.merge(
+            base_df[["Student ID","Subject"]].dropna(),
+            end_df[["Student ID","Subject"]].dropna(),
+            on=["Student ID","Subject"],
+        ))
+    avg_b = base_df["Obtained Marks"].mean() if not base_df.empty else None
+    avg_e = end_df["Obtained Marks"].mean()  if not end_df.empty  else None
+    sd_b  = base_df["Obtained Marks"].std()  if not base_df.empty and len(base_df)>1 else None
+    sd_e  = end_df["Obtained Marks"].std()   if not end_df.empty  and len(end_df)>1  else None
 
-            # ------------------------------------------
-            # TAB 2: SUBJECT DEEP-DIVE
-            # ------------------------------------------
-            with tab2:
-                st.markdown("### 📚 Subject & Grade Performance (R.I.S.E. Distribution)")
+    k1.metric("Matched Students", f"{matched:,}")
+    if avg_b is not None and avg_e is not None:
+        k2.metric("Baseline Mean", f"{avg_b:.2f}")
+        k3.metric("Endline Mean",  f"{avg_e:.2f}", delta=f"{avg_e-avg_b:.2f}")
+        k4.metric("Endline SD", f"{sd_e:.2f}" if sd_e else "N/A",
+                  delta=f"{sd_e-sd_b:.2f}" if (sd_e and sd_b) else None, delta_color="inverse")
+        be = len(base_df[base_df["Category"]=="Evolving"])/len(base_df)*100 if len(base_df) else 0
+        ee = len(end_df[end_df["Category"]=="Evolving"])/len(end_df)*100   if len(end_df)  else 0
+        k5.metric("Students in 'Evolving'", f"{ee:.1f}%", delta=f"{ee-be:.1f}%")
+    elif avg_b:
+        k2.metric("Baseline Mean",f"{avg_b:.2f}"); k3.metric("Endline Mean","N/A")
+        k4.metric("Endline SD","N/A"); k5.metric("Data Status","Awaiting Endline")
+    else:
+        k2.metric("Baseline Mean","N/A")
+        k3.metric("Endline Mean",f"{avg_e:.2f}" if avg_e else "N/A")
+        k4.metric("Endline SD",  f"{sd_e:.2f}"  if sd_e  else "N/A")
+        k5.metric("Data Status","Endline Only")
 
-                def get_stacked_data(df_subset):
-                    if df_subset.empty or 'Grade' not in df_subset.columns:
-                        return pd.DataFrame()
-                    grouped = df_subset.groupby(['Grade', 'Category']).size().reset_index(name='Count')
-                    grouped['Percentage'] = grouped.groupby('Grade')['Count'].transform(
-                        lambda x: x / x.sum() * 100
-                    )
-                    return grouped
+    st.info("**💡 SD:** A decrease means scores are clustering — the gap between high and low performers is closing.")
+    st.markdown("---")
+    ca, cb = st.columns(2)
+    with ca:
+        st.markdown("#### 📈 Score Distribution (Box Plot)")
+        fig_box = px.box(filtered_df, x="Academic Year", y="Obtained Marks",
+                         color="Academic Year", color_discrete_map=COLOR_MAP, points="all")
+        fig_box.update_layout(showlegend=False, margin=dict(l=0,r=0,t=30))
+        st.plotly_chart(fig_box, use_container_width=True)
+    with cb:
+        st.markdown("#### 🧬 R.I.S.E Category Shift")
+        cc = filtered_df.groupby(["Academic Year","Category"]).size().reset_index(name="Count")
+        cc["Pct"] = cc.groupby("Academic Year")["Count"].transform(lambda x: x/x.sum()*100)
+        fig_rise = px.bar(cc, x="Category", y="Pct", color="Academic Year",
+                          text=cc["Pct"].apply(lambda x: f"{x:.1f}%"),
+                          color_discrete_map=COLOR_MAP, category_orders={"Category": RISE_ORDER})
+        fig_rise.update_layout(barmode="group", margin=dict(l=0,r=0,t=30),
+                                legend=dict(orientation="h",yanchor="top",y=-0.15,xanchor="center",x=0.5,title=""))
+        st.plotly_chart(fig_rise, use_container_width=True)
 
-                base_stacked = get_stacked_data(base_df)
-                end_stacked  = get_stacked_data(end_df)
-                sub_col1, sub_col2 = st.columns(2)
-                with sub_col1:
-                    st.markdown("#### Baseline R.I.S.E by Grade")
-                    if not base_stacked.empty:
-                        fig_base_grade = px.bar(
-                            base_stacked, x="Grade", y="Percentage", color="Category",
-                            color_discrete_map=RISE_COLORS,
-                            text=base_stacked['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                            category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                        )
-                        fig_base_grade.update_layout(
-                            barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
-                            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                        )
-                        st.plotly_chart(fig_base_grade, width='stretch')
-                    else:
-                        st.info("No Baseline data available.")
-                with sub_col2:
-                    st.markdown("#### Endline R.I.S.E by Grade")
-                    if not end_stacked.empty:
-                        fig_end_grade = px.bar(
-                            end_stacked, x="Grade", y="Percentage", color="Category",
-                            color_discrete_map=RISE_COLORS,
-                            text=end_stacked['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                            category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                        )
-                        fig_end_grade.update_layout(
-                            barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
-                            legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                        )
-                        st.plotly_chart(fig_end_grade, width='stretch')
-                    else:
-                        st.info("No Endline data available.")
+# ── TAB 2: SUBJECT DEEP-DIVE ─────────────────────────────────
+with tab2:
+    st.markdown("### 📚 Subject & Grade Performance (R.I.S.E. Distribution)")
 
-                st.markdown("---")
-                st.markdown("#### 🧠 Automated Insights")
-                if not base_stacked.empty and not end_stacked.empty:
-                    try:
-                        base_piv = base_stacked.pivot(index='Grade', columns='Category', values='Percentage').fillna(0)
-                        end_piv  = end_stacked.pivot(index='Grade',  columns='Category', values='Percentage').fillna(0)
-                        for cat in ["Reviving", "Initiating", "Shaping", "Evolving"]:
-                            if cat not in base_piv.columns: base_piv[cat] = 0
-                            if cat not in end_piv.columns:  end_piv[cat]  = 0
-                        common_grades = base_piv.index.intersection(end_piv.index)
-                        if len(common_grades) > 0:
-                            diff_piv = end_piv.loc[common_grades] - base_piv.loc[common_grades]
-                            best_evo_grade = diff_piv['Evolving'].idxmax()
-                            best_evo_val   = diff_piv['Evolving'].max()
-                            best_rev_grade = diff_piv['Reviving'].idxmin()
-                            best_rev_val   = diff_piv['Reviving'].min()
-                            if best_evo_val > 0:
-                                st.success(
-                                    f"📈 **Top Excellence Growth:** Grade **{best_evo_grade}** saw the highest shift "
-                                    f"into 'Evolving', increasing its top-tier share by **{best_evo_val:+.1f}** percentage points."
-                                )
-                            else:
-                                st.warning("⚠️ **Excellence Alert:** No grade saw an increase in the 'Evolving' category percentage.")
-                            if best_rev_val < 0:
-                                st.success(
-                                    f"📉 **Highest Risk Reduction:** Grade **{best_rev_grade}** had the most successful intervention "
-                                    f"for struggling students, reducing its 'Reviving' population by **{abs(best_rev_val):.1f}** percentage points."
-                                )
-                            else:
-                                st.warning("⚠️ **Risk Alert:** No grade successfully reduced their share of students in the 'Reviving' category.")
-                        else:
-                            st.info("Insufficient overlapping grades between Baseline and Endline to generate comparative insights.")
-                    except Exception:
-                        st.info("Not enough data variance to generate automated insights.")
-                else:
-                    st.info("Awaiting both Baseline and Endline data to generate comparative insights.")
+    def get_stacked(dfs):
+        if dfs.empty or "Grade" not in dfs.columns: return pd.DataFrame()
+        g = dfs.groupby(["Grade","Category"]).size().reset_index(name="Count")
+        g["Pct"] = g.groupby("Grade")["Count"].transform(lambda x: x/x.sum()*100)
+        return g
 
-            # ------------------------------------------
-            # TAB 3: GEOGRAPHIC VIEW
-            # ------------------------------------------
-            with tab3:
-                st.markdown("### 🗺️ Geographic & Centre Analysis")
-                st.markdown("#### State-wise Performance Comparison (R.I.S.E %)")
-                if not filtered_df.empty:
-                    state_cat = filtered_df.groupby(['State', 'Academic Year', 'Category']).size().reset_index(name='Count')
-                    state_cat['Percentage'] = state_cat.groupby(['State', 'Academic Year'])['Count'].transform(
-                        lambda x: x / x.sum() * 100
-                    )
-                    state_cat['Period'] = state_cat['Academic Year'].map({'Baseline': 'B', 'Endline': 'E'})
+    bs, es = get_stacked(base_df), get_stacked(end_df)
+    sc1, sc2 = st.columns(2)
+    for col_w, stk, lbl in [(sc1, bs, "Baseline"), (sc2, es, "Endline")]:
+        with col_w:
+            st.markdown(f"#### {lbl} R.I.S.E by Grade")
+            if not stk.empty:
+                fig_g = px.bar(stk, x="Grade", y="Pct", color="Category",
+                               color_discrete_map=RISE_COLORS,
+                               text=stk["Pct"].apply(lambda x: f"{x:.1f}%" if x>5 else ""),
+                               category_orders={"Category": RISE_ORDER})
+                fig_g.update_layout(barmode="stack", yaxis_title="% of Students", margin=dict(l=0,r=0,t=30),
+                                    legend=dict(orientation="h",yanchor="top",y=-0.15,xanchor="center",x=0.5,title=""))
+                st.plotly_chart(fig_g, use_container_width=True)
+            else:
+                st.info(f"No {lbl} data.")
 
-                    def abbreviate_state(s):
-                        words = str(s).split()
-                        return "".join(w.upper() for w in words) if len(words) > 1 else str(s)[:3].upper()
+    st.markdown("---"); st.markdown("#### 🧠 Automated Insights")
+    if not bs.empty and not es.empty:
+        try:
+            bp = bs.pivot(index="Grade",columns="Category",values="Pct").fillna(0)
+            ep = es.pivot(index="Grade",columns="Category",values="Pct").fillna(0)
+            for cat in RISE_ORDER:
+                if cat not in bp.columns: bp[cat]=0
+                if cat not in ep.columns: ep[cat]=0
+            cg = bp.index.intersection(ep.index)
+            if len(cg):
+                dp = ep.loc[cg]-bp.loc[cg]
+                beg=dp["Evolving"].idxmax(); bev=dp["Evolving"].max()
+                brg=dp["Reviving"].idxmin(); brv=dp["Reviving"].min()
+                if bev>0: st.success(f"📈 Grade **{beg}** had the highest shift into 'Evolving' (+{bev:.1f}pp).")
+                else: st.warning("⚠️ No grade increased its 'Evolving' share.")
+                if brv<0: st.success(f"📉 Grade **{brg}** reduced 'Reviving' students most ({brv:.1f}pp).")
+                else: st.warning("⚠️ No grade reduced its 'Reviving' share.")
+        except Exception: st.info("Not enough variance to generate insights.")
+    else: st.info("Awaiting both Baseline and Endline data.")
 
-                    state_cat['State Abbr'] = state_cat['State'].apply(abbreviate_state)
-                    fig_state = px.bar(
-                        state_cat, x="Period", y="Percentage", color="Category", facet_col="State Abbr",
-                        hover_data={"State": True, "State Abbr": False, "Period": False, "Academic Year": True},
+# ── TAB 3: GEOGRAPHIC VIEW ────────────────────────────────────
+with tab3:
+    st.markdown("### 🗺️ Geographic & Centre Analysis")
+    if not filtered_df.empty:
+        sc = filtered_df.groupby(["State","Academic Year","Category"]).size().reset_index(name="Count")
+        sc["Pct"] = sc.groupby(["State","Academic Year"])["Count"].transform(lambda x: x/x.sum()*100)
+        sc["Period"] = sc["Academic Year"].map({"Baseline":"B","Endline":"E"})
+        sc["St"] = sc["State"].apply(lambda s: "".join(w.upper() for w in str(s).split()) if len(str(s).split())>1 else str(s)[:3].upper())
+        fig_st = px.bar(sc, x="Period", y="Pct", color="Category", facet_col="St",
+                        hover_data={"State":True,"St":False,"Period":False,"Academic Year":True},
                         color_discrete_map=RISE_COLORS,
-                        text=state_cat['Percentage'].apply(lambda x: f'{x:.1f}%' if not pd.isna(x) and x > 5 else ''),
-                        category_orders={
-                            "Category": ["Reviving", "Initiating", "Shaping", "Evolving"],
-                            "Period": ["B", "E"],
-                        },
-                    )
-                    fig_state.update_layout(
-                        barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=40),
-                        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                    )
-                    fig_state.update_xaxes(title_text='')
-                    fig_state.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-                    st.plotly_chart(fig_state, width='stretch')
-                else:
-                    st.info("No data available for State comparison.")
+                        text=sc["Pct"].apply(lambda x: f"{x:.1f}%" if x>5 else ""),
+                        category_orders={"Category":RISE_ORDER,"Period":["B","E"]})
+        fig_st.update_layout(barmode="stack",yaxis_title="% of Students",margin=dict(l=0,r=0,t=40),
+                             legend=dict(orientation="h",yanchor="top",y=-0.2,xanchor="center",x=0.5,title=""))
+        fig_st.update_xaxes(title_text="")
+        fig_st.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+        st.plotly_chart(fig_st, use_container_width=True)
 
-                st.markdown("---")
-                st.markdown("#### Top 10 Centres (Sorted by % Evolving)")
-                if not filtered_df.empty:
-                    center_cat = filtered_df.groupby(['Centre Name', 'Category']).size().reset_index(name='Count')
-                    center_cat['Percentage'] = center_cat.groupby('Centre Name')['Count'].transform(
-                        lambda x: x / x.sum() * 100
-                    )
-                    center_piv = center_cat.pivot(index='Centre Name', columns='Category', values='Percentage').fillna(0)
-                    for cat in ["Reviving", "Initiating", "Shaping", "Evolving"]:
-                        if cat not in center_piv.columns:
-                            center_piv[cat] = 0
-                    center_piv_sorted = center_piv.sort_values(
-                        by=['Evolving', 'Shaping', 'Initiating', 'Reviving'],
-                        ascending=[False, False, False, False],
-                    ).head(10).iloc[::-1]
-                    top_centres_long = center_piv_sorted.reset_index().melt(
-                        id_vars='Centre Name',
-                        value_vars=["Reviving", "Initiating", "Shaping", "Evolving"],
-                        var_name='Category', value_name='Percentage',
-                    )
-                    fig_top_centres = px.bar(
-                        top_centres_long, x="Percentage", y="Centre Name", color="Category",
-                        orientation='h', color_discrete_map=RISE_COLORS,
-                        text=top_centres_long['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                        category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                    )
-                    fig_top_centres.update_layout(
-                        barmode='stack', xaxis_title="% of Students", yaxis_title="",
-                        margin=dict(l=0, r=0, t=30),
-                        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                    )
-                    st.plotly_chart(fig_top_centres, width='stretch')
-                else:
-                    st.info("No data available for Top Centres.")
+    st.markdown("---"); st.markdown("#### Top 10 Centres (by % Evolving)")
+    if not filtered_df.empty:
+        ccat = filtered_df.groupby(["Centre Name","Category"]).size().reset_index(name="Count")
+        ccat["Pct"] = ccat.groupby("Centre Name")["Count"].transform(lambda x: x/x.sum()*100)
+        cp = ccat.pivot(index="Centre Name",columns="Category",values="Pct").fillna(0)
+        for cat in RISE_ORDER:
+            if cat not in cp.columns: cp[cat]=0
+        cp = cp.sort_values(by=["Evolving","Shaping","Initiating","Reviving"],ascending=False).head(10).iloc[::-1]
+        tc = cp.reset_index().melt(id_vars="Centre Name",value_vars=RISE_ORDER,var_name="Category",value_name="Pct")
+        fig_tc = px.bar(tc,x="Pct",y="Centre Name",color="Category",orientation="h",
+                        color_discrete_map=RISE_COLORS,
+                        text=tc["Pct"].apply(lambda x: f"{x:.1f}%" if x>5 else ""),
+                        category_orders={"Category":RISE_ORDER})
+        fig_tc.update_layout(barmode="stack",xaxis_title="% of Students",yaxis_title="",margin=dict(l=0,r=0,t=30),
+                             legend=dict(orientation="h",yanchor="top",y=-0.15,xanchor="center",x=0.5,title=""))
+        st.plotly_chart(fig_tc, use_container_width=True)
 
-            # ------------------------------------------
-            # TAB 4: STUDENT-LEVEL IMPACT
-            # ------------------------------------------
-            with tab4:
-                st.markdown("### 🧑‍🎓 Student-Level Impact (Matched Cohort)")
-                st.markdown("Tracking individual student growth by matching their Baseline and Endline records.")
-                if not base_df.empty and not end_df.empty and 'Student ID' in df.columns:
-                    base_clean = base_df[['Student ID', 'Subject', 'Obtained Marks', 'Category']].dropna(subset=['Student ID'])
-                    end_clean  = end_df[['Student ID',  'Subject', 'Obtained Marks', 'Category']].dropna(subset=['Student ID'])
-                    base_clean = base_clean.drop_duplicates(subset=['Student ID', 'Subject'])
-                    end_clean  = end_clean.drop_duplicates(subset=['Student ID', 'Subject'])
-                    paired_df  = pd.merge(base_clean, end_clean, on=['Student ID', 'Subject'], suffixes=('_BL', '_EL'))
+# ── TAB 4: STUDENT-LEVEL IMPACT ──────────────────────────────
+with tab4:
+    st.markdown("### 🧑‍🎓 Student-Level Impact (Matched Cohort)")
+    if not base_df.empty and not end_df.empty and "Student ID" in df.columns:
+        bc = base_df[["Student ID","Subject","Obtained Marks","Category"]].dropna(subset=["Student ID"]).drop_duplicates(subset=["Student ID","Subject"])
+        ec = end_df[["Student ID","Subject","Obtained Marks","Category"]].dropna(subset=["Student ID"]).drop_duplicates(subset=["Student ID","Subject"])
+        paired = pd.merge(bc, ec, on=["Student ID","Subject"], suffixes=("_BL","_EL"))
+        if not paired.empty:
+            paired["Delta"] = paired["Obtained Marks_EL"]-paired["Obtained Marks_BL"]
+            tot=len(paired); mc=paired["Delta"].mean()
+            pp=len(paired[paired["Delta"]>0])/tot*100
+            np_=len(paired[paired["Delta"]==0])/tot*100
+            mn=len(paired[paired["Delta"]<0])/tot*100
+            m1,m2,m3,m4,m5=st.columns(5)
+            m1.metric("Matched",f"{tot:,}"); m2.metric("Avg Change",f"{mc:+.2f}")
+            m3.metric("Improved",f"{pp:.1f}%"); m4.metric("Unchanged",f"{np_:.1f}%"); m5.metric("Declined",f"{mn:.1f}%")
+            st.markdown("---"); st.markdown("#### 🔄 Category Transition Matrix")
+            st.caption("Rows = Baseline category. Columns = Endline category. "
+                       "**Green** = upward, **grey** = no change, **red** = downward.")
+            tm = pd.crosstab(paired["Category_BL"],paired["Category_EL"],normalize="index")*100
+            tm = tm.reindex(index=RISE_ORDER,columns=RISE_ORDER,fill_value=0)
+            dm = pd.DataFrame(
+                [[0 if i==j else (1 if j>i else -1) for j in range(4)] for i in range(4)],
+                index=RISE_ORDER, columns=RISE_ORDER, dtype=float,
+            )
+            fig_heat = px.imshow(dm, x=tm.columns, y=tm.index,
+                                 color_continuous_scale=["#FF7F7F","#F2F4F7","#82E0AA"],
+                                 labels=dict(x="Endline Category",y="Baseline Category"))
+            fig_heat.update_traces(text=tm.map(lambda x: f"{x:.1f}%"), texttemplate="%{text}",
+                                   hovertemplate="BL: %{y}<br>EL: %{x}<br>%{text}<extra></extra>")
+            fig_heat.update_coloraxes(showscale=False)
+            fig_heat.update_layout(margin=dict(l=0,r=0,t=30,b=0),height=500)
+            _, hc, _ = st.columns(3)
+            with hc: st.plotly_chart(fig_heat, use_container_width=True)
+        else:
+            st.warning("No matched Student ID + Subject pairs between BL and EL.")
+    else:
+        st.info("Both Baseline and Endline with Student ID column needed.")
 
-                    if not paired_df.empty:
-                        paired_df['Score Delta'] = paired_df['Obtained Marks_EL'] - paired_df['Obtained Marks_BL']
-                        mean_change  = paired_df['Score Delta'].mean()
-                        total_paired = len(paired_df)
-                        positive_pct = len(paired_df[paired_df['Score Delta'] > 0]) / total_paired * 100
-                        neutral_pct  = len(paired_df[paired_df['Score Delta'] == 0]) / total_paired * 100
-                        negative_pct = len(paired_df[paired_df['Score Delta'] < 0]) / total_paired * 100
-
-                        st.markdown("---")
-                        m1, m2, m3, m4, m5 = st.columns(5)
-                        m1.metric("Matched Students",     f"{total_paired:,}")
-                        m2.metric("Avg Score Change",     f"{mean_change:+.2f}")
-                        m3.metric("Students (+ Score)",   f"{positive_pct:.1f}%")
-                        m4.metric("Students (No Change)", f"{neutral_pct:.1f}%")
-                        m5.metric("Students (- Score)",   f"{negative_pct:.1f}%")
-                        st.markdown("---")
-                        st.markdown("#### 🔄 Category Transition Matrix")
-                        st.caption(
-                            "Read rows left-to-right to see student mobility. "
-                            "**Background colors represent transition status:** "
-                            "<span style='color:#82E0AA;font-weight:bold;'>Green (Upward)</span>, "
-                            "<span style='color:#A9A9A9;font-weight:bold;'>Grey (No Change)</span>, and "
-                            "<span style='color:#FF7F7F;font-weight:bold;'>Red (Downward)</span>.",
-                            unsafe_allow_html=True,
-                        )
-                        transition = pd.crosstab(
-                            paired_df['Category_BL'], paired_df['Category_EL'], normalize='index'
-                        ) * 100
-                        cat_order = ["Reviving", "Initiating", "Shaping", "Evolving"]
-                        transition = transition.reindex(index=cat_order, columns=cat_order, fill_value=0)
-                        direction_matrix = pd.DataFrame(index=cat_order, columns=cat_order)
-                        for i, bl in enumerate(cat_order):
-                            for j, el in enumerate(cat_order):
-                                direction_matrix.loc[bl, el] = 0 if i == j else (1 if j > i else -1)
-                        direction_matrix = direction_matrix.astype(float)
-                        fig_heat = px.imshow(
-                            direction_matrix,
-                            labels=dict(x="Endline Category", y="Baseline Category", color="Transition Type"),
-                            x=transition.columns, y=transition.index,
-                            color_continuous_scale=["#FF7F7F", "#F2F4F7", "#82E0AA"],
-                        )
-                        text_matrix = transition.map(lambda x: f"{x:.1f}%")
-                        fig_heat.update_traces(
-                            text=text_matrix, texttemplate="%{text}",
-                            hovertemplate="Baseline: %{y}<br>Endline: %{x}<br>Students: %{text}<extra></extra>",
-                        )
-                        fig_heat.update_coloraxes(showscale=False)
-                        fig_heat.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=500)
-                        _, c2, _ = st.columns(3)
-                        with c2:
-                            st.plotly_chart(fig_heat, width='stretch')
-                    else:
-                        st.warning("⚠️ Could not find matching 'Student ID' and 'Subject' between the Baseline and Endline datasets.")
-                else:
-                    st.info("⚠️ Both Baseline and Endline datasets with a valid 'Student ID' column are required for this analysis.")
-
-            # ------------------------------------------
-            # TAB 5: GENDER ANALYSIS
-            # ------------------------------------------
-            with tab5:
-                st.markdown("### 🚻 Gender-Wise Performance")
-                if 'Gender' in filtered_df.columns:
-                    gdf = filtered_df[
-                        ~filtered_df['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])
-                    ].copy()
-                    if not gdf.empty:
-                        st.markdown("#### 🏆 Endline Average Score Snapshot")
-                        g_base = gdf[gdf['Academic Year'] == 'Baseline']
-                        g_end  = gdf[gdf['Academic Year'] == 'Endline']
-                        genders_present = sorted(gdf['Gender'].dropna().astype(str).unique())
-                        cols = st.columns(max(len(genders_present), 2))
-                        for i, g in enumerate(genders_present):
-                            with cols[i]:
-                                b_mean = g_base[g_base['Gender'].astype(str) == g]['Obtained Marks'].mean() if not g_base.empty else None
-                                e_mean = g_end[g_end['Gender'].astype(str) == g]['Obtained Marks'].mean()  if not g_end.empty  else None
-                                if b_mean is not None and e_mean is not None:
-                                    st.metric(f"{g} - Endline Avg", f"{e_mean:.2f}", delta=f"{e_mean - b_mean:.2f}")
-                                elif e_mean is not None:
-                                    st.metric(f"{g} - Endline Avg", f"{e_mean:.2f}")
-                                elif b_mean is not None:
-                                    st.metric(f"{g} - Baseline Avg", f"{b_mean:.2f}")
-
-                        st.markdown("---")
-                        gen_col1, gen_col2 = st.columns(2)
-                        with gen_col1:
-                            st.markdown("#### 📈 Average Score Trend")
-                            st.caption("Direct comparison of mean scores by gender.")
-                            avg_gen = gdf.groupby(['Gender', 'Academic Year'])['Obtained Marks'].mean().reset_index()
-                            fig_gen_avg = px.bar(
-                                avg_gen, x="Gender", y="Obtained Marks", color="Academic Year",
-                                barmode="group", color_discrete_map=COLOR_MAP, text_auto='.2f',
-                            )
-                            fig_gen_avg.update_layout(
-                                yaxis_title="Average Marks", margin=dict(l=0, r=0, t=30),
-                                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
-                            )
-                            st.plotly_chart(fig_gen_avg, width='stretch')
-                        with gen_col2:
-                            st.markdown("#### 🧬 R.I.S.E Category Shift")
-                            st.caption("Proportional breakdown of performance tiers by gender.")
-                            gen_cat = gdf.groupby(['Gender', 'Academic Year', 'Category']).size().reset_index(name='Count')
-                            gen_cat['Percentage'] = gen_cat.groupby(['Gender', 'Academic Year'])['Count'].transform(
-                                lambda x: x / x.sum() * 100
-                            )
-                            fig_gen_rise = px.bar(
-                                gen_cat, x="Academic Year", y="Percentage", color="Category", facet_col="Gender",
+# ── TAB 5: GENDER ANALYSIS ───────────────────────────────────
+with tab5:
+    st.markdown("### 🚻 Gender-Wise Performance")
+    if "Gender" in filtered_df.columns:
+        gdf = filtered_df[~filtered_df["Gender"].astype(str).str.lower().isin(["nan","none","null",""])].copy()
+        if not gdf.empty:
+            gb = gdf[gdf["Academic Year"]=="Baseline"]
+            ge = gdf[gdf["Academic Year"]=="Endline"]
+            gens = sorted(gdf["Gender"].dropna().unique())
+            gcols = st.columns(max(len(gens),2))
+            for i,g in enumerate(gens):
+                bm = gb[gb["Gender"]==g]["Obtained Marks"].mean() if not gb.empty else None
+                em = ge[ge["Gender"]==g]["Obtained Marks"].mean() if not ge.empty else None
+                with gcols[i]:
+                    if bm and em: st.metric(f"{g} Endline",f"{em:.2f}",delta=f"{em-bm:.2f}")
+                    elif em: st.metric(f"{g} Endline",f"{em:.2f}")
+                    elif bm: st.metric(f"{g} Baseline",f"{bm:.2f}")
+            st.markdown("---")
+            gc1,gc2=st.columns(2)
+            with gc1:
+                ag = gdf.groupby(["Gender","Academic Year"])["Obtained Marks"].mean().reset_index()
+                fig_ga = px.bar(ag,x="Gender",y="Obtained Marks",color="Academic Year",
+                                barmode="group",color_discrete_map=COLOR_MAP,text_auto=".2f")
+                fig_ga.update_layout(yaxis_title="Avg Marks",margin=dict(l=0,r=0,t=30),
+                                     legend=dict(orientation="h",yanchor="top",y=-0.15,xanchor="center",x=0.5,title=""))
+                st.plotly_chart(fig_ga,use_container_width=True)
+            with gc2:
+                gc_d = gdf.groupby(["Gender","Academic Year","Category"]).size().reset_index(name="Count")
+                gc_d["Pct"] = gc_d.groupby(["Gender","Academic Year"])["Count"].transform(lambda x: x/x.sum()*100)
+                fig_gc = px.bar(gc_d,x="Academic Year",y="Pct",color="Category",facet_col="Gender",
                                 color_discrete_map=RISE_COLORS,
-                                text=gen_cat['Percentage'].apply(lambda x: f'{x:.1f}%' if not pd.isna(x) and x > 5 else ''),
-                                category_orders={
-                                    "Category":      ["Reviving", "Initiating", "Shaping", "Evolving"],
-                                    "Academic Year": ["Baseline", "Endline"],
-                                },
-                            )
-                            fig_gen_rise.update_layout(
-                                barmode='stack', yaxis_title="% of Students", margin=dict(l=0, r=0, t=40),
-                                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                            )
-                            fig_gen_rise.update_xaxes(title_text='')
-                            fig_gen_rise.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-                            st.plotly_chart(fig_gen_rise, width='stretch')
-                    else:
-                        st.info("No valid gender data available in the current filtered selection.")
-                else:
-                    st.warning("⚠️ 'Gender' column is missing from the uploaded dataset.")
+                                text=gc_d["Pct"].apply(lambda x: f"{x:.1f}%" if x>5 else ""),
+                                category_orders={"Category":RISE_ORDER,"Academic Year":["Baseline","Endline"]})
+                fig_gc.update_layout(barmode="stack",yaxis_title="% of Students",margin=dict(l=0,r=0,t=40),
+                                     legend=dict(orientation="h",yanchor="top",y=-0.2,xanchor="center",x=0.5,title=""))
+                fig_gc.update_xaxes(title_text="")
+                fig_gc.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+                st.plotly_chart(fig_gc,use_container_width=True)
+        else:
+            st.info("No valid gender data in current selection.")
+    else:
+        st.warning("'Gender' column missing from dataset.")
 
-            # ------------------------------------------
-            # TAB 6: RTM ANALYSIS
-            # ------------------------------------------
-            with tab6:
-                st.markdown("### 📉 Regression to the Mean (RTM) Analysis")
-                if not base_df.empty and not end_df.empty and 'Student ID' in df.columns:
-                    base_rtm = base_df[['Student ID', 'Subject', 'Obtained Marks']].dropna(subset=['Student ID', 'Obtained Marks'])
-                    end_rtm  = end_df[['Student ID',  'Subject', 'Obtained Marks']].dropna(subset=['Student ID', 'Obtained Marks'])
-                    base_rtm = base_rtm.drop_duplicates(subset=['Student ID', 'Subject'])
-                    end_rtm  = end_rtm.drop_duplicates(subset=['Student ID', 'Subject'])
-                    rtm_df   = pd.merge(base_rtm, end_rtm, on=['Student ID', 'Subject'], suffixes=('_BL', '_EL'))
+# ── TAB 6: RTM ANALYSIS ──────────────────────────────────────
+with tab6:
+    st.markdown("### 📉 Regression to the Mean (RTM) Analysis")
+    if not base_df.empty and not end_df.empty and "Student ID" in df.columns:
+        br = base_df[["Student ID","Subject","Obtained Marks"]].dropna(subset=["Student ID","Obtained Marks"]).drop_duplicates(subset=["Student ID","Subject"])
+        er = end_df[["Student ID","Subject","Obtained Marks"]].dropna(subset=["Student ID","Obtained Marks"]).drop_duplicates(subset=["Student ID","Subject"])
+        rtm = pd.merge(br,er,on=["Student ID","Subject"],suffixes=("_BL","_EL"))
+        if not rtm.empty:
+            norm = st.checkbox("⚙️ Normalise scores (Z-scores)",value=False,
+                               help="Standardises both distributions to mean=0, SD=1.")
+            if norm:
+                for col in ["Obtained Marks_BL","Obtained Marks_EL"]:
+                    rtm[col]=(rtm[col]-rtm[col].mean())/rtm[col].std()
+            rtm["Delta"]=rtm["Obtained Marks_EL"]-rtm["Obtained Marks_BL"]
+            corr=rtm["Obtained Marks_BL"].corr(rtm["Delta"])
+            var=rtm["Obtained Marks_BL"].var()
+            cov=rtm["Obtained Marks_BL"].cov(rtm["Delta"])
+            slope=cov/var if var and not pd.isna(var) else 0.0
+            intercept=rtm["Delta"].mean()-(slope*rtm["Obtained Marks_BL"].mean()) if not pd.isna(slope) else 0.0
+            tot=len(rtm)
+            imp=len(rtm[rtm["Delta"]>0])/tot*100; dec=len(rtm[rtm["Delta"]<0])/tot*100
+            tag=("Strong RTM" if slope<=-0.3 else "Moderate RTM" if slope<=-0.1 else "Minimal RTM" if slope<0 else "No RTM")
+            r1,r2,r3,r4=st.columns(4)
+            r1.metric("Correlation (r)",f"{corr:.3f}" if not pd.isna(corr) else "N/A")
+            r2.metric("Slope",f"{slope:.3f}"); r3.metric("Impr/Decl",f"{imp:.1f}%/{dec:.1f}%"); r4.metric("Interpretation",tag)
+            (st.warning if slope<=-0.1 else st.success)(
+                "💡 Part of the improvement may be statistical RTM." if slope<=-0.1
+                else "💡 Growth is more likely attributable to actual intervention impact."
+            )
+            st.markdown("---")
+            fig_rtm = px.scatter(rtm,x="Obtained Marks_BL",y="Delta",trendline="ols",
+                                 trendline_color_override="red",opacity=0.6,
+                                 color_discrete_sequence=["#636EFA"],
+                                 labels={"Obtained Marks_BL":"Baseline Score","Delta":"Score Delta"})
+            fig_rtm.add_hline(y=0,line_dash="dash",line_color="black",
+                              annotation_text="No Change",annotation_position="bottom right")
+            fig_rtm.update_layout(margin=dict(l=0,r=0,t=30))
+            st.plotly_chart(fig_rtm,use_container_width=True)
+            try:
+                rtm["Quintile"]=pd.qcut(rtm["Obtained Marks_BL"],q=5,duplicates="drop")
+                bstats=rtm.groupby("Quintile",observed=False).agg(
+                    Avg_BL=("Obtained Marks_BL","mean"),
+                    Avg_Delta=("Delta","mean"),
+                    N=("Student ID","count"),
+                ).reset_index()
+                bstats["Q_str"]=bstats["Quintile"].astype(str)
+                bstats=bstats.sort_values("Avg_BL")
+                fig_bin=px.bar(bstats,x="Q_str",y="Avg_Delta",
+                               text=bstats["Avg_Delta"].apply(lambda x: f"{x:+.2f}"),
+                               color="Avg_Delta",color_continuous_scale=px.colors.diverging.RdYlGn,
+                               color_continuous_midpoint=0,
+                               labels={"Q_str":"Baseline Quintile","Avg_Delta":"Avg Delta"})
+                fig_bin.add_hline(y=0,line_dash="solid",line_color="black",line_width=1)
+                fig_bin.update_traces(textposition="outside")
+                fig_bin.update_layout(margin=dict(l=0,r=0,t=30,b=40),coloraxis_showscale=False)
+                st.plotly_chart(fig_bin,use_container_width=True)
+            except ValueError:
+                st.info("Not enough variance for quintile bins.")
+            r2_val=corr**2 if not pd.isna(corr) else 0
+            s1,s2,s3=st.columns(3)
+            s1.metric("r",f"{corr:.3f}" if not pd.isna(corr) else "N/A")
+            s2.metric("Slope",f"{slope:.3f}"); s3.metric("R²",f"{r2_val:.3f}")
+            eq=f"**Delta = {intercept:.2f} + ({slope:.2f} × Baseline)**"
+            if slope<-0.3: st.success(f"✔️ Strong RTM confirmed. {eq}")
+            elif slope<-0.1: st.info(f"ℹ️ Moderate RTM. {eq}")
+            elif slope<0: st.warning(f"⚠️ Weak RTM. {eq}")
+            else: st.error(f"❌ No RTM (slope positive). {eq}")
+        else:
+            st.warning("No matched Student ID pairs for RTM analysis.")
+    else:
+        st.info("Both Baseline and Endline with Student ID column needed.")
 
-                    if not rtm_df.empty:
-                        st.markdown("---")
-                        normalize_rtm = st.checkbox(
-                            "⚙️ Normalize scores (Z-scores) before analysis", value=False,
-                            help="Standardizes scores so both have mean=0 and SD=1.",
-                        )
-                        if normalize_rtm:
-                            rtm_df['Obtained Marks_BL'] = (rtm_df['Obtained Marks_BL'] - rtm_df['Obtained Marks_BL'].mean()) / rtm_df['Obtained Marks_BL'].std()
-                            rtm_df['Obtained Marks_EL'] = (rtm_df['Obtained Marks_EL'] - rtm_df['Obtained Marks_EL'].mean()) / rtm_df['Obtained Marks_EL'].std()
+# ── PPTX REPORT ──────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("---"); st.markdown("### 📄 DRM Compliance Report")
+    if selected_donors != "All":
+        report_name = f"AY25-26_Impact_Report_{selected_donors.replace(' ','_')}.pptx"
+        if st.session_state.get("ready_ppt_donor") != selected_donors:
+            st.session_state.pop("ready_ppt", None); st.session_state.pop("ready_ppt_donor", None)
 
-                        rtm_df['Score Delta'] = rtm_df['Obtained Marks_EL'] - rtm_df['Obtained Marks_BL']
-                        correlation = rtm_df['Obtained Marks_BL'].corr(rtm_df['Score Delta'])
-                        variance    = rtm_df['Obtained Marks_BL'].var()
-                        covariance  = rtm_df['Obtained Marks_BL'].cov(rtm_df['Score Delta'])
-                        slope       = covariance / variance if variance and not pd.isna(variance) else 0.0
-                        intercept   = rtm_df['Score Delta'].mean() - (slope * rtm_df['Obtained Marks_BL'].mean()) if not pd.isna(slope) else 0.0
-                        total_rtm   = len(rtm_df)
-                        improving_pct = len(rtm_df[rtm_df['Score Delta'] > 0]) / total_rtm * 100
-                        declining_pct = len(rtm_df[rtm_df['Score Delta'] < 0]) / total_rtm * 100
+        if st.button(f"⚙️ Prepare PPTX for {selected_donors}", use_container_width=True):
+            with st.spinner("Generating presentation…"):
+                try:
+                    from pptx import Presentation
+                    from pptx.util import Inches
+                    prs = Presentation()
+                    chart_figs = {}
 
-                        if   slope <= -0.3: rtm_tag = "Strong RTM detected"
-                        elif slope <= -0.1: rtm_tag = "Moderate RTM"
-                        elif slope  <  0:   rtm_tag = "Minimal RTM"
-                        else:               rtm_tag = "No RTM detected"
+                    def fig_to_png(fig):
+                        fig.update_layout(plot_bgcolor="white", paper_bgcolor="white")
+                        buf = io.BytesIO()
+                        fig.write_image(buf, format="png", engine="kaleido", width=1000, height=550)
+                        buf.seek(0); return buf
 
-                        kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
-                        kpi_col1.metric("Correlation (r)",        f"{correlation:.3f}" if not pd.isna(correlation) else "N/A")
-                        kpi_col2.metric("Regression Slope",       f"{slope:.3f}")
-                        kpi_col3.metric("Improving vs Declining", f"{improving_pct:.1f}% / {declining_pct:.1f}%")
-                        kpi_col4.metric("Interpretation",         rtm_tag)
+                    def add_slide(fig, title):
+                        sl = prs.slides.add_slide(prs.slide_layouts[5])
+                        sl.shapes.title.text = title
+                        sl.shapes.add_picture(fig_to_png(fig), Inches(0.5), Inches(1.5), width=Inches(9))
 
-                        if slope <= -0.1:
-                            st.warning("💡 **Important Insight:** Part of the observed improvement may be due to statistical regression to the mean rather than pure intervention impact.")
-                        else:
-                            st.success("💡 **Important Insight:** Observed improvements are less likely driven by RTM. The growth seen is more likely attributable to the actual impact of the educational intervention.")
+                    sl1 = prs.slides.add_slide(prs.slide_layouts[0])
+                    sl1.shapes.title.text = "AY 25-26 Impact Report"
+                    sl1.placeholders[1].text = f"Donor: {selected_donors}"
 
-                        st.markdown("---")
-                        st.markdown("#### Core RTM View (Scatter Plot)")
-                        st.caption("**Interpretation:** A **negative slope** (trendline going down) suggests RTM is present.")
-                        fig_rtm = px.scatter(
-                            rtm_df, x="Obtained Marks_BL", y="Score Delta",
-                            trendline="ols", trendline_color_override="red", opacity=0.6,
-                            color_discrete_sequence=["#636EFA"],
-                            labels={
-                                "Obtained Marks_BL": "Baseline Score (Z-Score)" if normalize_rtm else "Baseline Score",
-                                "Score Delta": "Score Delta (Z-Score)" if normalize_rtm else "Score Delta (Endline - Baseline)",
-                            },
-                        )
-                        fig_rtm.add_hline(
-                            y=0, line_dash="dash", line_color="black",
-                            annotation_text="No Change (Delta = 0)", annotation_position="bottom right",
-                        )
-                        fig_rtm.update_layout(margin=dict(l=0, r=0, t=30))
-                        st.plotly_chart(fig_rtm, width='stretch')
+                    sl2 = prs.slides.add_slide(prs.slide_layouts[1])
+                    sl2.shapes.title.text = "Executive Summary"
+                    tf = sl2.placeholders[1].text_frame; tf.word_wrap = True
+                    tf.text = f"Centres: {filtered_df['Centre Name'].nunique()}"
+                    tf.add_paragraph().text = f"States: {', '.join(str(s) for s in sorted(filtered_df['State'].dropna().unique()))}"
+                    tf.add_paragraph().text = f"Subjects: {', '.join(sorted(filtered_df['Subject'].dropna().unique()))}"
 
-                        st.markdown("---")
-                        st.markdown("#### Binned Analysis (Quintiles)")
-                        st.caption("Students are grouped into 5 equal-sized bins based on their initial Baseline scores.")
-                        try:
-                            rtm_df['BL_Quintile'] = pd.qcut(rtm_df['Obtained Marks_BL'], q=5, duplicates='drop')
-                            binned_stats = rtm_df.groupby('BL_Quintile', observed=False).agg(
-                                Avg_BL_Score=('Obtained Marks_BL', 'mean'),
-                                Avg_Score_Delta=('Score Delta', 'mean'),
-                                Student_Count=('Student ID', 'count'),
-                            ).reset_index()
-                            binned_stats['BL_Quintile_Str'] = binned_stats['BL_Quintile'].astype(str)
-                            binned_stats = binned_stats.sort_values('Avg_BL_Score')
-                            fig_binned = px.bar(
-                                binned_stats, x='BL_Quintile_Str', y='Avg_Score_Delta',
-                                text=binned_stats['Avg_Score_Delta'].apply(lambda x: f"{x:+.2f}"),
-                                color='Avg_Score_Delta',
-                                color_continuous_scale=px.colors.diverging.RdYlGn,
-                                color_continuous_midpoint=0,
-                                labels={
-                                    "BL_Quintile_Str": "Baseline Score Range (Quintiles)",
-                                    "Avg_Score_Delta": "Average Score Delta",
-                                },
-                                hover_data={"Student_Count": True, "Avg_BL_Score": ':.2f', "Avg_Score_Delta": ':.2f'},
-                            )
-                            fig_binned.add_hline(y=0, line_dash="solid", line_color="black", line_width=1)
-                            fig_binned.update_traces(textposition='outside')
-                            fig_binned.update_layout(margin=dict(l=0, r=0, t=30, b=40), coloraxis_showscale=False)
-                            st.plotly_chart(fig_binned, width='stretch')
-                        except ValueError:
-                            st.info("Not enough variance in Baseline scores to generate quintile bins for this selection.")
+                    _cc = filtered_df.groupby(["Academic Year","Category"]).size().reset_index(name="Count")
+                    _cc["Pct"] = _cc.groupby("Academic Year")["Count"].transform(lambda x: x/x.sum()*100)
+                    chart_figs["rise"] = px.bar(_cc, x="Category", y="Pct", color="Academic Year",
+                                                color_discrete_map=COLOR_MAP, category_orders={"Category":RISE_ORDER})
+                    chart_figs["rise"].update_layout(barmode="group")
+                    chart_figs["box"] = px.box(filtered_df, x="Academic Year", y="Obtained Marks",
+                                               color="Academic Year", color_discrete_map=COLOR_MAP)
+                    _gdf2 = filtered_df[~filtered_df["Gender"].astype(str).str.lower().isin(["nan","none","null",""])]
+                    if not _gdf2.empty:
+                        _ag2 = _gdf2.groupby(["Gender","Academic Year"])["Obtained Marks"].mean().reset_index()
+                        chart_figs["gender"] = px.bar(_ag2, x="Gender", y="Obtained Marks",
+                                                      color="Academic Year", barmode="group",
+                                                      color_discrete_map=COLOR_MAP)
 
-                        st.markdown("---")
-                        st.markdown("#### 🧮 Statistical Validation")
-                        r_squared = correlation ** 2 if not pd.isna(correlation) else 0.0
-                        sc1, sc2, sc3 = st.columns(3)
-                        sc1.metric("Correlation (r)",      f"{correlation:.3f}" if not pd.isna(correlation) else "N/A")
-                        sc2.metric("Regression Slope (b)", f"{slope:.3f}")
-                        sc3.metric("R-squared (R²)",       f"{r_squared:.3f}")
-                        st.markdown("**Mathematical Interpretation:**")
-                        equation_str = f"**Score Delta = {intercept:.2f} + ({slope:.2f} × Baseline)**"
-                        if slope < -0.3:
-                            st.success(f"✔️ **Strong RTM Effect Confirmed:** {equation_str}")
-                        elif slope < -0.1:
-                            st.info(f"ℹ️ **Moderate RTM Effect:** {equation_str}")
-                        elif slope < 0:
-                            st.warning(f"⚠️ **Weak RTM Effect:** The slope is very close to zero. {equation_str}")
-                        else:
-                            st.error(f"❌ **No RTM Effect Detected:** The slope is positive ({slope:.2f}). {equation_str}")
-                    else:
-                        st.warning("⚠️ Could not find matching 'Student ID' and 'Subject' for RTM analysis.")
-                else:
-                    st.info("⚠️ Both Baseline and Endline datasets with a valid 'Student ID' column are required for this analysis.")
+                    add_slide(chart_figs["rise"], "Overall R.I.S.E Shift")
+                    add_slide(chart_figs["box"], "Score Distribution")
+                    if "gender" in chart_figs:
+                        add_slide(chart_figs["gender"], "Gender Performance")
 
-            # ==========================================
-            # DRM REPORT GENERATION (PPTX)
-            # ==========================================
-            with st.sidebar:
-                st.markdown("---")
-                st.markdown("### 📄 DRM Compliance Report")
-                if selected_donors != "All":
-                    report_name = f"AY25-26_Impact_Report_{selected_donors.replace(' ', '_')}.pptx"
+                    for subj in sorted(filtered_df["Subject"].dropna().unique()):
+                        for period_df2, lbl2 in [(base_df,"Baseline"),(end_df,"Endline")]:
+                            sd = period_df2[period_df2["Subject"]==subj] if "Subject" in period_df2.columns else pd.DataFrame()
+                            if not sd.empty and "Grade" in sd.columns:
+                                grp = sd.groupby(["Grade","Category"]).size().reset_index(name="Count")
+                                grp["Pct"] = grp.groupby("Grade")["Count"].transform(lambda x: x/x.sum()*100)
+                                _f = px.bar(grp,x="Grade",y="Pct",color="Category",
+                                            color_discrete_map=RISE_COLORS,barmode="stack",
+                                            category_orders={"Category":RISE_ORDER})
+                                add_slide(_f, f"{lbl2} R.I.S.E — {subj}")
 
-                    # FIX 6 — clear stale PPTX from session state when donor changes
-                    if st.session_state.get('ready_ppt_donor') != selected_donors:
-                        st.session_state.pop('ready_ppt', None)
-                        st.session_state.pop('ready_ppt_donor', None)
+                    buf = io.BytesIO(); prs.save(buf); buf.seek(0)
+                    st.session_state["ready_ppt"] = buf.getvalue()
+                    st.session_state["ready_ppt_donor"] = selected_donors
+                    st.success("Report ready!")
+                except ImportError:
+                    st.error("Install python-pptx and kaleido first.")
+                except Exception as e:
+                    st.error(f"Error generating report: {e}")
 
-                    if st.button(f"⚙️ Prepare PPTX for {selected_donors}", use_container_width=True):
-                        with st.spinner("Compiling charts and generating presentation..."):
-                            try:
-                                from pptx import Presentation
-                                from pptx.util import Inches, Pt
-
-                                prs = Presentation()
-
-                                def state_code(s):
-                                    words = str(s).split()
-                                    return "".join(w[0].upper() for w in words) if len(words) > 1 else str(s)[:2].upper()
-
-                                def fig_to_png(fig):
-                                    fig.update_layout(
-                                        plot_bgcolor="white", paper_bgcolor="white", font=dict(size=13),
-                                        yaxis=dict(
-                                            showline=True, linecolor="black", linewidth=1.5,
-                                            showticklabels=True, ticks="outside", tickcolor="black",
-                                            ticklen=5, showgrid=True, gridcolor="lightgrey",
-                                            gridwidth=1, zeroline=True, zerolinecolor="black",
-                                            zerolinewidth=1, mirror=False,
-                                        ),
-                                        xaxis=dict(
-                                            showline=True, linecolor="black", linewidth=1.5,
-                                            showticklabels=True, ticks="outside", tickcolor="black",
-                                            ticklen=5, showgrid=False, mirror=False,
-                                        ),
-                                    )
-                                    buf = io.BytesIO()
-                                    fig.write_image(buf, format="png", engine="kaleido", width=1000, height=550)
-                                    buf.seek(0)
-                                    return buf
-
-                                # FIX 5 — track figures in an explicit dict instead of checking locals()
-                                chart_figures = {}
-
-                                def add_chart_slide(fig, title_text):
-                                    slide = prs.slides.add_slide(prs.slide_layouts[5])
-                                    slide.shapes.title.text = title_text
-                                    slide.shapes.add_picture(fig_to_png(fig), Inches(0.5), Inches(1.5), width=Inches(9))
-
-                                # Title slide
-                                slide1 = prs.slides.add_slide(prs.slide_layouts[0])
-                                slide1.shapes.title.text = "AY 25-26 Impact Report"
-                                slide1.placeholders[1].text = (
-                                    f"Donor: {selected_donors}\nGenerated automatically via Streamlit"
-                                )
-
-                                # Executive summary slide
-                                slide2 = prs.slides.add_slide(prs.slide_layouts[1])
-                                slide2.shapes.title.text = "Executive Summary"
-                                tf = slide2.placeholders[1].text_frame
-                                tf.word_wrap = True
-                                num_schools       = filtered_df['Centre Name'].nunique()
-                                subjects_assessed = ", ".join(sorted(filtered_df['Subject'].dropna().unique()))
-                                states_in_data    = sorted(filtered_df['State'].dropna().unique())
-                                states_str        = ", ".join(state_code(s) for s in states_in_data)
-                                tf.text = f"States covered: {states_str}"
-                                tf.add_paragraph().text = f"Total Centres Impacted: {num_schools}"
-                                tf.add_paragraph().text = f"Subjects Assessed: {subjects_assessed}"
-                                tf.add_paragraph().text = "Subject-wise Student Distribution (Endline):"
-                                if not end_df.empty and 'Subject' in end_df.columns:
-                                    for subj, count in (
-                                        end_df.drop_duplicates(subset=['Student ID', 'Subject'])['Subject']
-                                        .value_counts().sort_index().items()
-                                    ):
-                                        p = tf.add_paragraph()
-                                        p.text  = f"{subj}: {count} students"
-                                        p.level = 1
-                                else:
-                                    p = tf.add_paragraph()
-                                    p.text  = "No endline data available."
-                                    p.level = 1
-
-                                # Build and register chart figures before adding slides
-                                # Overall RISE shift
-                                _cat_counts = filtered_df.groupby(['Academic Year', 'Category']).size().reset_index(name='Count')
-                                _cat_counts['Percentage'] = _cat_counts.groupby('Academic Year')['Count'].transform(
-                                    lambda x: x / x.sum() * 100
-                                )
-                                chart_figures['fig_rise'] = px.bar(
-                                    _cat_counts, x="Category", y="Percentage", color="Academic Year",
-                                    text=_cat_counts['Percentage'].apply(lambda x: f'{x:.1f}%' if not pd.isna(x) else ''),
-                                    color_discrete_map=COLOR_MAP,
-                                    category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                                )
-                                chart_figures['fig_rise'].update_layout(barmode='group')
-
-                                # Box plot
-                                chart_figures['fig_box'] = px.box(
-                                    filtered_df, x="Academic Year", y="Obtained Marks",
-                                    color="Academic Year", color_discrete_map=COLOR_MAP, points="all",
-                                )
-                                chart_figures['fig_box'].update_layout(showlegend=False)
-
-                                # Gender avg
-                                _gdf = filtered_df[
-                                    ~filtered_df['Gender'].astype(str).str.lower().isin(['nan', 'none', 'null', ''])
-                                ]
-                                if not _gdf.empty:
-                                    _avg_gen = _gdf.groupby(['Gender', 'Academic Year'])['Obtained Marks'].mean().reset_index()
-                                    chart_figures['fig_gen_avg'] = px.bar(
-                                        _avg_gen, x="Gender", y="Obtained Marks", color="Academic Year",
-                                        barmode="group", color_discrete_map=COLOR_MAP, text_auto='.2f',
-                                    )
-
-                                # Add registered charts as slides
-                                add_chart_slide(chart_figures['fig_rise'], "Overall R.I.S.E Category Shift (BL vs EL)")
-
-                                # Per-subject grade RISE slides
-                                all_subjects = sorted(filtered_df['Subject'].dropna().unique()) if 'Subject' in filtered_df.columns else []
-                                for subj in all_subjects:
-                                    subj_base = base_df[base_df['Subject'].astype(str) == subj] if 'Subject' in base_df.columns else pd.DataFrame()
-                                    subj_end  = end_df[end_df['Subject'].astype(str) == subj]   if 'Subject' in end_df.columns  else pd.DataFrame()
-                                    for period_df, label in [(subj_base, "Baseline"), (subj_end, "Endline")]:
-                                        if not period_df.empty and 'Grade' in period_df.columns:
-                                            grp = period_df.groupby(['Grade', 'Category']).size().reset_index(name='Count')
-                                            grp['Percentage'] = grp.groupby('Grade')['Count'].transform(
-                                                lambda x: x / x.sum() * 100
-                                            )
-                                            _fig = px.bar(
-                                                grp, x="Grade", y="Percentage", color="Category",
-                                                color_discrete_map=RISE_COLORS,
-                                                text=grp['Percentage'].apply(lambda x: f'{x:.1f}%' if x > 5 else ''),
-                                                category_orders={"Category": ["Reviving", "Initiating", "Shaping", "Evolving"]},
-                                            )
-                                            _fig.update_layout(
-                                                barmode='stack', yaxis_title="% of Students",
-                                                margin=dict(l=0, r=0, t=50), showlegend=True,
-                                                legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
-                                            )
-                                            add_chart_slide(_fig, f"{label} R.I.S.E by Grade — {subj}")
-
-                                add_chart_slide(chart_figures['fig_box'], "Score Distribution (Box Plot)")
-                                if 'fig_gen_avg' in chart_figures:
-                                    add_chart_slide(chart_figures['fig_gen_avg'], "Average Score Trend by Gender")
-
-                                ppt_buf = io.BytesIO()
-                                prs.save(ppt_buf)
-                                ppt_buf.seek(0)
-                                st.session_state['ready_ppt']       = ppt_buf.getvalue()
-                                st.session_state['ready_ppt_donor'] = selected_donors
-                                st.success("Report prepared successfully!")
-
-                            except ImportError:
-                                st.error("⚠️ Missing required libraries! Please run: pip install python-pptx kaleido")
-                            except Exception as e:
-                                st.error(f"⚠️ Error preparing presentation: {e}")
-
-                    if 'ready_ppt' in st.session_state and st.session_state.get('ready_ppt_donor') == selected_donors:
-                        st.download_button(
-                            label="⬇️ Download Presentation",
-                            data=st.session_state['ready_ppt'],
-                            file_name=report_name,
-                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                            use_container_width=True,
-                        )
-                else:
-                    st.info("💡 Select a specific Donor from the global filters to enable the DRM Report generator.")
-
-else:
-    st.warning(
-        "⚠️ No data file loaded. Please upload an Excel file above to populate the dashboard."
-    )
+        if "ready_ppt" in st.session_state and st.session_state.get("ready_ppt_donor") == selected_donors:
+            st.download_button(
+                "⬇️ Download Presentation",
+                data=st.session_state["ready_ppt"],
+                file_name=report_name,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+            )
+    else:
+        st.info("💡 Select a specific Donor to enable the DRM Report generator.")
