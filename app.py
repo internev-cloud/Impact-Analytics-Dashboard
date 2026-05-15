@@ -56,8 +56,15 @@ STATE_ABBR = {
     "UK": "Uttarakhand",    "UP": "Uttar Pradesh",
 }
 
-# AY 24-25 uses "Maths"; AY 25-26 uses "Math"
-SUBJECT_NORM = {"Maths": "Math"}
+# Subject name normalisation across both workbooks:
+#   "Maths"                  → "Math"              (AY24-25 spelling)
+#   "Basic Digital Literacy" → "Digital Literacy"  (AY24-25 long form)
+#   "DL"                     → "Digital Literacy"  (AY25-26 abbreviation)
+SUBJECT_NORM = {
+    "Maths":                  "Math",
+    "Basic Digital Literacy": "Digital Literacy",
+    "DL":                     "Digital Literacy",
+}
 
 # Sentinel used in clean_sheet for rows that have no Gender column (AY 24-25)
 NO_GENDER = "__NO_GENDER__"
@@ -520,44 +527,128 @@ if st.session_state["current_page"] == "longitudinal":
                     st.write("Insufficient category data for insights.")
 
     # ────────────────────────────────────────────────────────────────────────
-    # TAB 2: SUBJECT EFFICACY (retained cohort)
+    # TAB 2: SUBJECT EFFICACY — per-grade slopegraphs (all students, Endline only)
+    # Each grade gets its own slopegraph: x-axis = AY 24-25 | AY 25-26,
+    # one coloured line per subject present in that grade.
+    # Uses df_endlines (not the retained cohort) so every student is included.
     # ────────────────────────────────────────────────────────────────────────
     with sub_tab:
-        st.markdown("### 📈 YoY Subject Slopegraph (Retained Cohort)")
-        if no_overlap:
-            st.warning("⚠️ No overlapping Student IDs. Use the **Subject Wise** tab instead.")
+        st.markdown("### 📈 Subject Efficacy — Per-Grade YoY Slopegraph")
+        st.caption(
+            "Each chart shows how subjects performed within a single grade across both academic years "
+            "(AY 24-25 Endline → AY 25-26 Endline). Subjects that only appear in one year show a "
+            "single dot with no connecting line — that's expected given curriculum differences."
+        )
+
+        # Build the endline-only slice with normalised subjects
+        # (SUBJECT_NORM now maps Basic Digital Literacy + DL → Digital Literacy)
+        df_eff = df_endlines.copy()
+
+        # Numeric grade sort so Grade 10 doesn't precede Grade 5
+        grades_eff = sorted(
+            df_eff["Grade"].dropna().unique(),
+            key=lambda x: int(x) if str(x).isdigit() else 99,
+        )
+
+        if df_eff.empty:
+            st.info("No endline data available for the current filters.")
         else:
-            s24 = df_ret_24.groupby("Subject")["Obtained Marks"].mean().reset_index(); s24["Year"] = "AY 24-25"
-            s25 = df_ret_25.groupby("Subject")["Obtained Marks"].mean().reset_index(); s25["Year"] = "AY 25-26"
-            slope_df = pd.concat([s24, s25])
-            col_s1, col_s2 = st.columns([1.5, 1])
-            with col_s1:
-                fig_slope = px.line(
-                    slope_df, x="Year", y="Obtained Marks", color="Subject",
-                    markers=True, text="Obtained Marks",
-                    category_orders={"Year": ["AY 24-25", "AY 25-26"]},
-                )
-                fig_slope.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10))
-                fig_slope.update_layout(
-                    xaxis_title="", yaxis_title="Avg Score",
-                    plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
-                )
-                fig_slope.update_xaxes(showgrid=False, linecolor="black")
-                fig_slope.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
-                st.plotly_chart(fig_slope, use_container_width=True)
-            with col_s2:
-                try:
-                    gd = pd.merge(s24, s25, on="Subject", suffixes=("_24", "_25"))
-                    gd["Delta"] = gd["Obtained Marks_25"] - gd["Obtained Marks_24"]
-                    best  = gd.loc[gd["Delta"].idxmax()]
-                    worst = gd.loc[gd["Delta"].idxmin()]
+            # Overall insight callout (across all grades, shared subjects only)
+            try:
+                overall_24 = df_eff[df_eff["Academic Year"] == "AY24-25"].groupby("Subject")["Obtained Marks"].mean()
+                overall_25 = df_eff[df_eff["Academic Year"] == "AY25-26"].groupby("Subject")["Obtained Marks"].mean()
+                overall_delta = (overall_25 - overall_24).dropna()
+                if not overall_delta.empty:
+                    best_sub  = overall_delta.idxmax()
+                    worst_sub = overall_delta.idxmin()
                     st.success(
-                        f"**{best['Subject']}** grew most ({best['Delta']:+.2f} pts). "
-                        f"**{worst['Subject']}** showed least momentum ({worst['Delta']:+.2f} pts)."
+                        f"**Across all grades — {best_sub}** showed the highest YoY growth "
+                        f"({overall_delta[best_sub]:+.2f} pts). "
+                        f"**{worst_sub}** showed the least momentum ({overall_delta[worst_sub]:+.2f} pts)."
                     )
-                    st.markdown(f"**💡** Cross-pollinate {best['Subject']} techniques into {worst['Subject']} planning.")
-                except Exception:
-                    st.write("Insufficient subject overlap for insights.")
+                    st.markdown(
+                        f"**💡** Cross-pollinate **{best_sub}** teaching strategies into "
+                        f"**{worst_sub}** curriculum planning for the next cycle."
+                    )
+            except Exception:
+                pass
+
+            st.markdown("---")
+
+            # One slopegraph per grade, laid out in pairs (2 columns)
+            grade_pairs = [grades_eff[i:i+2] for i in range(0, len(grades_eff), 2)]
+
+            for pair in grade_pairs:
+                cols = st.columns(len(pair))
+                for col_widget, grade in zip(cols, pair):
+                    df_grade = df_eff[df_eff["Grade"] == grade]
+
+                    # Average endline score per subject per academic year for this grade
+                    grade_slope = (
+                        df_grade.groupby(["Academic Year", "Subject"])["Obtained Marks"]
+                        .mean().reset_index()
+                    )
+                    grade_slope.rename(columns={"Academic Year": "Year", "Obtained Marks": "Avg Score"}, inplace=True)
+                    # Map "AY24-25" → "AY 24-25" for display consistency with the screenshot style
+                    grade_slope["Year"] = grade_slope["Year"].map({"AY24-25": "AY 24-25", "AY25-26": "AY 25-26"})
+
+                    with col_widget:
+                        if grade_slope.empty:
+                            st.info(f"Grade {grade}: no data.")
+                        else:
+                            # Count students for the subtitle
+                            n_students = df_grade["Student ID"].nunique()
+                            subjects_in_grade = sorted(grade_slope["Subject"].unique())
+
+                            fig_g = px.line(
+                                grade_slope,
+                                x="Year", y="Avg Score", color="Subject",
+                                markers=True, text="Avg Score",
+                                category_orders={"Year": ["AY 24-25", "AY 25-26"]},
+                                title=f"Grade {grade}  <sup>({n_students} students)</sup>",
+                            )
+                            fig_g.update_traces(
+                                textposition="top center",
+                                texttemplate="%{text:.1f}",
+                                marker=dict(size=11),
+                                line=dict(width=2.5),
+                            )
+                            fig_g.update_layout(
+                                xaxis_title="",
+                                yaxis_title="Avg Endline Score",
+                                yaxis=dict(
+                                    showgrid=True, gridcolor="lightgrey",
+                                    zeroline=False, range=[0, 10.5],
+                                ),
+                                xaxis=dict(showgrid=False, linecolor="black"),
+                                plot_bgcolor="rgba(0,0,0,0)",
+                                margin=dict(l=0, r=0, t=50, b=10),
+                                legend=dict(
+                                    title="Subject",
+                                    orientation="v",
+                                    yanchor="top", y=1,
+                                    xanchor="left", x=1.02,
+                                    font=dict(size=11),
+                                ),
+                                height=380,
+                            )
+                            st.plotly_chart(fig_g, use_container_width=True)
+
+                            # Compact insight: best and worst subject for this grade
+                            try:
+                                g24 = grade_slope[grade_slope["Year"] == "AY 24-25"].set_index("Subject")["Avg Score"]
+                                g25 = grade_slope[grade_slope["Year"] == "AY 25-26"].set_index("Subject")["Avg Score"]
+                                delta_g = (g25 - g24).dropna()
+                                if not delta_g.empty:
+                                    b = delta_g.idxmax(); w = delta_g.idxmin()
+                                    st.caption(
+                                        f"📈 **{b}** +{delta_g[b]:.2f} pts &nbsp;|&nbsp; "
+                                        f"📉 **{w}** {delta_g[w]:+.2f} pts"
+                                    )
+                            except Exception:
+                                pass
+
+                st.markdown("---")
 
     # ────────────────────────────────────────────────────────────────────────
     # TAB 3: GENDER EQUITY (retained cohort, gender only in AY25-26)
@@ -604,65 +695,147 @@ if st.session_state["current_page"] == "longitudinal":
                         st.write("Insufficient gender data.")
 
     # ────────────────────────────────────────────────────────────────────────
-    # TAB 4: SUBJECT WISE YoY (all students, Endline only)
+    # TAB 4: SUBJECT WISE YoY — Grade-aware (all students, Endline only)
     # ────────────────────────────────────────────────────────────────────────
     with subj_tab:
-        st.markdown("### 📚 Subject-Wise YoY Comparison (All Students, Endline Only)")
+        st.markdown("### 📚 Subject & Grade-Wise YoY Comparison (All Students, Endline Only)")
+        st.caption(
+            "Use the **Subject** filter to focus on one subject and see how each grade performed "
+            "across both academic years. With 'All' selected, charts aggregate across all subjects."
+        )
         df_sv = df_endlines.copy()
 
-        all_subjects_sv = sorted(df_sv["Subject"].dropna().unique())
-        sel_subj = st.selectbox("Filter by Subject", ["All"] + list(all_subjects_sv), key="subj_sel_long")
+        # ── Filters row ───────────────────────────────────────────────────
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            all_subjects_sv = sorted(df_sv["Subject"].dropna().unique())
+            sel_subj = st.selectbox(
+                "Filter by Subject", ["All"] + list(all_subjects_sv), key="subj_sel_long",
+                help="Select a single subject to see per-grade breakdowns clearly. "
+                     "Some subjects only exist in one year — that's expected.",
+            )
+        with fc2:
+            ay_opts_sv = [ay for ay in AY_ORDER if ay in df_sv["Academic Year"].values]
+            sel_ay_sv  = st.selectbox(
+                "Academic Year for R.I.S.E chart", ay_opts_sv,
+                index=len(ay_opts_sv) - 1, key="ay_subj_long",
+            )
+
         if sel_subj != "All":
             df_sv = df_sv[df_sv["Subject"] == sel_subj]
 
+        # Canonical grade order (numeric sort)
+        all_grades_sv = sorted(df_sv["Grade"].dropna().unique(), key=lambda x: int(x) if str(x).isdigit() else 99)
+
+        # ── Row 1: Avg endline score by Grade (line) + RISE by Grade (bar) ─
         col_sw1, col_sw2 = st.columns(2)
 
         with col_sw1:
-            st.markdown("#### Average Endline Score (YoY)")
-            subj_avg = (
-                df_sv.groupby(["Academic Year", "Subject"])["Obtained Marks"]
+            st.markdown("#### Avg Endline Score by Grade (YoY)")
+            # Each line = one Academic Year; x-axis = Grade
+            grade_avg = (
+                df_sv.groupby(["Grade", "Academic Year"])["Obtained Marks"]
                 .mean().reset_index()
             )
-            # BUG FIX: sort by plain string category_orders, NOT by Categorical dtype
-            # Plotly handles ordering via category_orders= — no Categorical needed.
-            fig_sw = px.line(
-                subj_avg, x="Academic Year", y="Obtained Marks", color="Subject",
+            grade_avg["Grade"] = pd.Categorical(grade_avg["Grade"], categories=all_grades_sv, ordered=True)
+            grade_avg = grade_avg.sort_values("Grade")
+
+            fig_grade_line = px.line(
+                grade_avg, x="Grade", y="Obtained Marks", color="Academic Year",
                 markers=True, text="Obtained Marks",
-                category_orders={"Academic Year": AY_ORDER},
+                color_discrete_map=AY_COLOR_MAP,
+                category_orders={"Academic Year": AY_ORDER, "Grade": all_grades_sv},
             )
-            fig_sw.update_traces(textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10))
-            fig_sw.update_layout(
-                xaxis_title="", yaxis_title="Avg Endline Score",
+            fig_grade_line.update_traces(
+                textposition="top center", texttemplate="%{text:.1f}", marker=dict(size=10)
+            )
+            fig_grade_line.update_layout(
+                xaxis_title="Grade", yaxis_title="Avg Endline Score",
                 plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=30),
+                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5, title=""),
             )
-            fig_sw.update_xaxes(showgrid=False, linecolor="black")
-            fig_sw.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
-            st.plotly_chart(fig_sw, use_container_width=True)
+            fig_grade_line.update_xaxes(showgrid=False, linecolor="black")
+            fig_grade_line.update_yaxes(showgrid=True, gridcolor="lightgrey", zeroline=False)
+            st.plotly_chart(fig_grade_line, use_container_width=True)
 
         with col_sw2:
-            st.markdown("#### R.I.S.E Category by Subject")
+            st.markdown(f"#### R.I.S.E by Grade — {sel_ay_sv}")
             if "Category" in df_sv.columns:
-                ay_opts = [ay for ay in AY_ORDER if ay in df_sv["Academic Year"].values]
-                sel_ay  = st.selectbox("Academic Year", ay_opts, index=len(ay_opts)-1, key="ay_subj_long")
-                df_sv_ay = df_sv[df_sv["Academic Year"] == sel_ay]
-                sc = df_sv_ay.groupby(["Subject", "Category"]).size().reset_index(name="Count")
-                sc["Pct"] = sc.groupby("Subject")["Count"].transform(lambda x: x / x.sum() * 100)
-                fig_sc = px.bar(
-                    sc, x="Subject", y="Pct", color="Category",
-                    color_discrete_map=RISE_COLORS,
-                    text=sc["Pct"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
-                    category_orders={"Category": RISE_ORDER},
+                df_sv_ay = df_sv[df_sv["Academic Year"] == sel_ay_sv]
+                grade_cat = df_sv_ay.groupby(["Grade", "Category"]).size().reset_index(name="Count")
+                grade_cat["Pct"] = grade_cat.groupby("Grade")["Count"].transform(
+                    lambda x: x / x.sum() * 100
                 )
-                fig_sc.update_layout(
-                    barmode="stack", yaxis_title="% of Students", margin=dict(l=0, r=0, t=30),
+                grade_cat["Grade"] = pd.Categorical(
+                    grade_cat["Grade"], categories=all_grades_sv, ordered=True
+                )
+                grade_cat = grade_cat.sort_values("Grade")
+
+                fig_grade_rise = px.bar(
+                    grade_cat, x="Grade", y="Pct", color="Category",
+                    color_discrete_map=RISE_COLORS,
+                    text=grade_cat["Pct"].apply(lambda x: f"{x:.1f}%" if x > 5 else ""),
+                    category_orders={"Category": RISE_ORDER, "Grade": all_grades_sv},
+                )
+                fig_grade_rise.update_layout(
+                    barmode="stack", xaxis_title="Grade", yaxis_title="% of Students",
+                    margin=dict(l=0, r=0, t=30),
                     legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5, title=""),
                 )
-                st.plotly_chart(fig_sc, use_container_width=True)
+                st.plotly_chart(fig_grade_rise, use_container_width=True)
 
+        # ── Row 2: YoY delta by Grade ─────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### Grade-Wise YoY Score Change (AY24-25 → AY25-26 Endline)")
+        el24_grade = (
+            df_sv[df_sv["Academic Year"] == "AY24-25"]
+            .groupby("Grade")["Obtained Marks"].mean()
+        )
+        el25_grade = (
+            df_sv[df_sv["Academic Year"] == "AY25-26"]
+            .groupby("Grade")["Obtained Marks"].mean()
+        )
+        yoy_grade = (el25_grade - el24_grade).dropna().reset_index()
+        yoy_grade.columns = ["Grade", "YoY Change"]
+        yoy_grade["Color"] = yoy_grade["YoY Change"].apply(
+            lambda x: "Improved" if x >= 0 else "Declined"
+        )
+        yoy_grade["Grade"] = pd.Categorical(
+            yoy_grade["Grade"], categories=all_grades_sv, ordered=True
+        )
+        yoy_grade = yoy_grade.sort_values("Grade")
+
+        if not yoy_grade.empty:
+            fig_yoy_grade = px.bar(
+                yoy_grade, x="Grade", y="YoY Change", color="Color",
+                color_discrete_map={"Improved": "#00964d", "Declined": "#ed1c2d"},
+                text=yoy_grade["YoY Change"].apply(lambda x: f"{x:+.2f}"),
+                category_orders={"Grade": all_grades_sv},
+            )
+            fig_yoy_grade.add_hline(y=0, line_dash="dash", line_color="black")
+            fig_yoy_grade.update_layout(
+                showlegend=False, margin=dict(l=0, r=0, t=30),
+                plot_bgcolor="rgba(0,0,0,0)", xaxis_title="Grade",
+                yaxis_title="YoY Endline Score Change",
+            )
+            st.plotly_chart(fig_yoy_grade, use_container_width=True)
+        else:
+            st.info(
+                "Both years' endline data needed for YoY grade comparison. "
+                "If a Subject filter is active for a subject only present in one year, clear it."
+            )
+
+        # ── Row 3: Subject-level YoY delta (kept for completeness) ────────
         st.markdown("---")
         st.markdown("#### Subject-Wise YoY Score Change (AY24-25 → AY25-26 Endline)")
-        el24s = df_endlines[df_endlines["Academic Year"] == "AY24-25"].groupby("Subject")["Obtained Marks"].mean()
-        el25s = df_endlines[df_endlines["Academic Year"] == "AY25-26"].groupby("Subject")["Obtained Marks"].mean()
+        el24s = (
+            df_endlines[df_endlines["Academic Year"] == "AY24-25"]
+            .groupby("Subject")["Obtained Marks"].mean()
+        )
+        el25s = (
+            df_endlines[df_endlines["Academic Year"] == "AY25-26"]
+            .groupby("Subject")["Obtained Marks"].mean()
+        )
         yoy_s = (el25s - el24s).dropna().reset_index()
         yoy_s.columns = ["Subject", "YoY Change"]
         yoy_s["Color"] = yoy_s["YoY Change"].apply(lambda x: "Improved" if x >= 0 else "Declined")
