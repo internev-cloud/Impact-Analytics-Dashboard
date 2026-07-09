@@ -21,7 +21,7 @@ Sheets used (DRM)
   Active centers       — centre master with registration data
   New Enrolled student — mid-month new enrolments
 
-Column mapping (VRM new file → dashboard internal name)
+Column mapping (VRM new file → dashboard internal name) 
 ────────────────────────────────────────────────────────
   Volunteer ID              → vol_id
   Volunteer Name            → vol_name
