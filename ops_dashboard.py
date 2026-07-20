@@ -275,7 +275,6 @@ def _group_ref(ref: str) -> str:
         return "NGO / Community Org"
     return "Other"
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # VRM DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -360,6 +359,19 @@ def load_data(path: str) -> dict:
 
     return {"active": active, "dropped": dropped, "new_reg": new_reg}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TOPIC and SubTopic DATA LOADING
+# ─────────────────────────────────────────────────────────────────────────────
+TOPIC_FILE = os.path.join(DATA_DIR, "Topic_SubTopic_Cancelled_Offline_May_2026.xlsx")
+
+@st.cache_data(show_spinner=False)
+def load_topic_data():
+    if not os.path.exists(TOPIC_FILE):
+        return None, None, None
+    topic_df = pd.read_excel(TOPIC_FILE, sheet_name="Topic-SubTopic")
+    cancelled_df = pd.read_excel(TOPIC_FILE, sheet_name="Cancelled Sessions")
+    offline_df = pd.read_excel(TOPIC_FILE, sheet_name="Offline Sessions")
+    return topic_df, cancelled_df, offline_df
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DRM DATA LOADING
@@ -385,6 +397,7 @@ DRM_SHEET_ALIASES = {
     "Live_CLH":       ["Live CLH"],
     "Attendance %":   ["Live Attendance %"],
 }
+
 
 @st.cache_data(show_spinner=False)
 def load_drm_data(path: str) -> dict:
@@ -743,11 +756,12 @@ def render_ops_dashboard():
     # ─────────────────────────────────────────────────────────────────────────
     # TABS
     # ─────────────────────────────────────────────────────────────────────────
-    tab_vol, tab_ctr, tab_aca, tab_drm = st.tabs([
+    tab_vol, tab_ctr, tab_aca, tab_drm, tab_top = st.tabs([
         "🙋 Volunteers",
         "🏫 Centres",
         "📚 Academic Health",
         "📊 DRM Client Report",
+        "📚 Topic & SubTopic Analytics",
     ])
 
 
@@ -1937,3 +1951,109 @@ def render_ops_dashboard():
             </div>""",
             unsafe_allow_html=True,
         )
+    # ═════════════════════════════════════════════════════════════════════════
+    # TAB 5 — Topic & SubTopic Analytics
+    # ═════════════════════════════════════════════════════════════════════════
+    with tab_top:
+        st.markdown("""
+        <style>
+        .metric-card{
+            background:#ffffff; padding:18px; border-radius:12px;
+            box-shadow:0 2px 10px rgba(0,0,0,.08);
+        }
+        [data-testid="stMetricValue"]{
+            font-size:34px; font-weight:700; color:#0f766e;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        topic_df, cancelled_df, offline_df = load_topic_data()
+
+        if topic_df is None:
+            st.error(
+                f"Topic/SubTopic data file not found. "
+                f"Place `Topic_SubTopic_Cancelled_Offline_May2026.xlsx` in `{DATA_DIR}`."
+            )
+        else:
+            st.title("📚 Topic & SubTopic Analytics Dashboard")
+
+            # Filters in-tab (sidebar is used by VRM/DRM)
+            with st.expander("📊 Filters", expanded=True):
+                fc1, fc2, fc3 = st.columns(3)
+                base_df = topic_df.copy()
+
+                with fc1:
+                    state_filter = st.multiselect(
+                        "State",
+                        sorted(base_df["state"].dropna().unique()),
+                        key="top_state",
+                    )
+                state_df = base_df[base_df["state"].isin(state_filter)] if state_filter else base_df.copy()
+
+                with fc2:
+                    subject_filter = st.multiselect(
+                        "Subject",
+                        sorted(state_df["subject"].dropna().unique()),
+                        key="top_subject",
+                    )
+                subject_df = state_df[state_df["subject"].isin(subject_filter)] if subject_filter else state_df.copy()
+
+                with fc3:
+                    grade_filter = st.multiselect(
+                        "Grade",
+                        sorted(subject_df["grade"].dropna().unique()),
+                        key="top_grade",
+                    )
+                grade_df = subject_df[subject_df["grade"].isin(grade_filter)] if grade_filter else subject_df.copy()
+
+                fc4, fc5 = st.columns(2)
+                with fc4:
+                    status_filter = st.multiselect(
+                        "Session Status",
+                        sorted(grade_df["session_status"].dropna().unique()),
+                        key="top_status",
+                    )
+                status_df = grade_df[grade_df["session_status"].isin(status_filter)] if status_filter else grade_df.copy()
+
+                with fc5:
+                    centre_filter = st.multiselect(
+                        "Centre",
+                        sorted(status_df["center_name"].dropna().unique()),
+                        key="top_centre",
+                    )
+                filtered_df = (
+                    status_df[status_df["center_name"].isin(centre_filter)]
+                    if centre_filter else status_df.copy()
+                )
+
+            # KPI cards
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Sessions", f"{len(filtered_df):,}")
+            with col2:
+                st.metric("Unique Topics", f"{filtered_df['topic_name'].nunique():,}")
+            with col3:
+                st.metric("Unique Subtopics", f"{filtered_df['sub_topic_name'].nunique():,}")
+            with col4:
+                st.metric("Active Centers", f"{filtered_df['center_id'].nunique():,}")
+
+            st.subheader("📋 Topic / Sub-topic Session Summary")
+            pivot_table = (
+                filtered_df
+                .groupby(["topic_name", "sub_topic_name"], dropna=False)
+                .agg(**{
+                    "#Sessions": ("topic_name", "count"),
+                    "#Schools": ("center_name", "nunique"),
+                })
+                .reset_index()
+                .sort_values("#Sessions", ascending=False)
+                .rename(columns={"topic_name": "Topic", "sub_topic_name": "Sub-topic"})
+            )
+            st.dataframe(pivot_table, use_container_width=True, hide_index=True, height=700)
+
+            st.download_button(
+                "📥 Download Topic Data",
+                filtered_df.to_csv(index=False),
+                file_name="topic_data.csv",
+                key="top_download",
+            )
