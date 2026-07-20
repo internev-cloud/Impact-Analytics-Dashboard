@@ -359,6 +359,8 @@ def load_data(path: str) -> dict:
 
     return {"active": active, "dropped": dropped, "new_reg": new_reg}
 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TOPIC and SubTopic DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
