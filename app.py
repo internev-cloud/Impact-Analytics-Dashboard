@@ -7,9 +7,7 @@ import urllib.request
 import json
 import io
 from streamlit_oauth import OAuth2Component
-#from ops_dashboard import render_ops_dashboard
 from ops_dashboard import show_dashboard
-show_dashboard()
 # ==========================================
 # PAGE CONFIGURATION & CUSTOM CSS
 # ==========================================
