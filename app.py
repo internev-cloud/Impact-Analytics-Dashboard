@@ -74,8 +74,8 @@ NO_GENDER = "__NO_GENDER__"
 # AUTHENTICATION GATEKEEPER
 # ==========================================
 try:
-    CLIENT_ID     = st.secrets["GOOGLE_CLIENT_ID"]
-   CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
+    CLIENT_ID = st.secrets["GOOGLE_CLIENT_ID"]
+    CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
 except (FileNotFoundError, KeyError):
     st.error(
         "Missing `.streamlit/secrets.toml` or Streamlit Cloud Secrets. "
@@ -83,14 +83,13 @@ except (FileNotFoundError, KeyError):
     )
     st.stop()
 
-AUTHORIZE_URL    = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URL        = "https://oauth2.googleapis.com/token"
+AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_TOKEN_URL = "https://oauth2.googleapis.com/revoke"
 
 for _k, _v in [("logged_in_email", None), ("user_first_name", "User")]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
-
 if not st.session_state["logged_in_email"]:
     _, col2, _ = st.columns(3)
     with col2:
