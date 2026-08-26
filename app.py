@@ -7,9 +7,7 @@ import urllib.request
 import json
 import io
 from streamlit_oauth import OAuth2Component
-#from ops_dashboard import render_ops_dashboard
-from ops_dashboard import show_dashboard
-show_dashboard()
+
 # ==========================================
 # PAGE CONFIGURATION & CUSTOM CSS
 # ==========================================
@@ -77,7 +75,7 @@ NO_GENDER = "__NO_GENDER__"
 # ==========================================
 try:
     CLIENT_ID     = st.secrets["GOOGLE_CLIENT_ID"]
-    CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
+   CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
 except (FileNotFoundError, KeyError):
     st.error(
         "Missing `.streamlit/secrets.toml` or Streamlit Cloud Secrets. "
@@ -133,8 +131,7 @@ if not st.session_state["logged_in_email"]:
             except Exception as e:
                 st.error(f"Error verifying login with Google: {e}")
                 st.stop()
-    st.stop()
-
+   st.stop()
 
 # ==========================================
 # SHARED SIDEBAR FILTER BUILDER
@@ -246,7 +243,7 @@ if st.session_state["current_page"] == "home":
         unsafe_allow_html=True,
     )
     st.markdown("---")
-    col1, col2, col3, col4, *_ = st.columns(4)
+    col1, col2, col3, *_ = st.columns(4)
     with col1:
         st.markdown("<h1 style='text-align:center;font-size:4rem;'>📈</h1>", unsafe_allow_html=True)
         if st.button("Impact Analytics Dashboard", use_container_width=True):
@@ -259,10 +256,6 @@ if st.session_state["current_page"] == "home":
         st.markdown("<h1 style='text-align:center;font-size:4rem;'>🏢</h1>", unsafe_allow_html=True)
         if st.button("Operations & Impact Command Center", use_container_width=True):
             st.session_state["current_page"] = "ops"; st.rerun()
-    with col4:
-        st.markdown("<h1 style='text-align:center;font-size:4rem;'>📚</h1>", unsafe_allow_html=True)
-        if st.button("Topic & SubTopic Analytics", use_container_width=True):
-            st.session_state["current_page"] = "topics"; st.rerun()
     st.stop()
 
 
@@ -297,42 +290,6 @@ if st.session_state["current_page"] == "ops":
     except ImportError:
         st.error(
             "⚠️ `ops_dashboard.py` not found. "
-            "Place it in the same folder as `app.py` and restart the app."
-        )
-    st.stop()
-
-
-# ==========================================
-# TOPIC & SUBTOPIC ANALYTICS MODULE
-# ==========================================
-if st.session_state["current_page"] == "topics":
-    # Sidebar nav (mirrors the other modules)
-    with st.sidebar:
-        try:
-            st.image("evidyaloka_logo.png", width=273)
-        except Exception:
-            pass
-        st.success(f"👤 **{st.session_state['user_first_name']}**")
-        nc1, nc2 = st.columns(2)
-        with nc1:
-            if st.button("🏠 Home", use_container_width=True, key="nav_home_topics"):
-                st.session_state["current_page"] = "home"; st.rerun()
-        with nc2:
-            if st.button("Sign Out", use_container_width=True, key="signout_topics"):
-                st.session_state.update({
-                    "logged_in_email": None,
-                    "user_first_name": "User",
-                    "current_page": "home",
-                })
-                st.rerun()
-
-    # Import and render — topic_dashboard.py must sit alongside app.py
-    try:
-        from topic_dashboard import render_topic_dashboard
-        render_topic_dashboard()
-    except ImportError:
-        st.error(
-            "⚠️ `topic_dashboard.py` not found. "
             "Place it in the same folder as `app.py` and restart the app."
         )
     st.stop()
