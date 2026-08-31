@@ -75,7 +75,7 @@ NO_GENDER = "__NO_GENDER__"
 # ==========================================
 try:
     CLIENT_ID     = st.secrets["GOOGLE_CLIENT_ID"]
-   CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
+    CLIENT_SECRET = st.secrets["GOOGLE_CLIENT_SECRET"]
 except (FileNotFoundError, KeyError):
     st.error(
         "Missing `.streamlit/secrets.toml` or Streamlit Cloud Secrets. "
