@@ -131,7 +131,7 @@ if not st.session_state["logged_in_email"]:
             except Exception as e:
                 st.error(f"Error verifying login with Google: {e}")
                 st.stop()
-   st.stop()
+    st.stop()
 
 # ==========================================
 # SHARED SIDEBAR FILTER BUILDER
